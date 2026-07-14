@@ -40,7 +40,7 @@ export function pickChainWord(previousWord, exclude = []) {
   return pickRandom(candidates);
 }
 
-// BOTの1ターン分(15秒相当)をまとめて生成する
+// CPUの1ターン分(15秒相当)をまとめて生成する
 export function generateBotTurn(previousWord, exclude = []) {
   const excludeSet = new Set(exclude);
   const words = [];

@@ -3,28 +3,15 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>かなラッシュバトル</title>
+  <title>かなラッシュ</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body class="battle-page">
   <div class="app-shell">
     <header class="app-header">
-      <h1 class="app-title">MC<span>かなラッシュ</span>バトル</h1>
-      <a class="ghost-link" href="/">← 練習モードに戻る</a>
+      <h1 class="app-title">かなラッシュ</h1>
+      <a class="ghost-link" href="/">← トップへ戻る</a>
     </header>
-
-    <section id="modeSelectScreen" class="screen screen-card">
-      <div id="modeSelectTeaser">
-        <img src="material/music_rapper_woman.png" alt="">
-        <span class="vs-badge">VS</span>
-        <img src="material/rapper.png" alt="">
-      </div>
-      <p class="lead-text">1ターン15秒、自分だけのしりとりチェーンをできるだけ長く繋いで文字数を稼ごう。稼いだ文字数がそのまま相手へのダメージになる。HPが0になったら負け。</p>
-      <div class="cta-stack">
-        <button id="startBotButton" class="btn btn-primary">BOTと対戦する</button>
-        <button id="startHumanButton" class="btn btn-secondary">2人で対戦する(同じ端末で交代プレイ)</button>
-      </div>
-    </section>
 
     <!-- 対戦開始後はこの画面を常に表示したままにし、準備/結果/決着はこの上にポップアップで重ねる -->
     <section id="battleScreen" class="screen screen-card hidden">
@@ -86,19 +73,22 @@
       <ul id="turnWordList" class="word-chip-list"></ul>
 
       <div id="botThinking" class="hidden bot-thinking-card">
-        BOTが考え中<span class="dots"><span>.</span><span>.</span><span>.</span></span>
+        CPUが考え中<span class="dots"><span>.</span><span>.</span><span>.</span></span>
       </div>
     </section>
   </div>
 
-  <!-- ポップアップ: 準備インターバル(初回・交代・BOT開始前) -->
+  <!-- ポップアップ: 準備インターバル(初回・交代・CPU開始前) -->
   <div id="handoffOverlay" class="modal-overlay hidden">
     <div class="modal-card screen-card">
       <p class="eyebrow">GET READY</p>
       <h2 id="handoffMessage" class="section-title"></h2>
       <div class="get-ready-count" id="getReadyNumber"></div>
+      <div class="progress-bar"><div class="progress-fill" id="getReadyFill"></div></div>
       <p id="handoffCountdownLabel" class="caption"></p>
-      <button id="handoffReadyButton" class="btn btn-secondary">今すぐはじめる</button>
+      <div class="cta-stack">
+        <button id="handoffReadyButton" class="btn btn-secondary">今すぐはじめる</button>
+      </div>
     </div>
   </div>
 
@@ -107,7 +97,6 @@
     <div class="modal-card screen-card">
       <h2 id="roundResultTitle" class="section-title"></h2>
       <div id="roundResultDetail" class="result-compare"></div>
-      <p id="nextUpLabel" class="pill pill-accent"></p>
       <div class="progress-bar"><div class="progress-fill" id="autoAdvanceFill"></div></div>
       <p id="autoAdvanceLabel" class="caption"></p>
       <div class="cta-stack">
@@ -253,7 +242,7 @@
       });
     }
 
-    // このターンで獲得した単語をチップ状に描画する(人間・BOT共通)
+    // このターンで獲得した単語をチップ状に描画する(人間・CPU共通)
     function renderWordChips() {
       document.querySelector("#turnWordList").innerHTML = turnWords
         .map((w) => `<li class="word-chip">${w}<span class="chip-count">${w.length}</span></li>`)
@@ -262,8 +251,8 @@
 
     function startMode(mode) {
       players = mode === "bot"
-        ? [{ name: "あなた", hp: START_HP, isBot: false }, { name: "BOT", hp: START_HP, isBot: true }]
-        : [{ name: "プレイヤー1", hp: START_HP, isBot: false }, { name: "プレイヤー2", hp: START_HP, isBot: false }];
+        ? [{ name: "あなた", hp: START_HP, isBot: false }, { name: "CPU", hp: START_HP, isBot: true }]
+        : [{ name: "1P", hp: START_HP, isBot: false }, { name: "2P", hp: START_HP, isBot: false }];
       playerHistory = [[], []];
       allMentionedWords = [];
       roundNumber = 0;
@@ -301,25 +290,20 @@
       renderHp();
       setActiveFighter(turnIndex);
 
-      // BOTのターンは待ち時間なしで即開始する
+      // CPUのターンは待ち時間なしで即開始する
       if (player.isBot) {
         runBotTurn(player);
         return;
       }
 
-      // ラウンド結果画面ですでに「次の番」を案内済みなら、準備ポップアップは重ねない
+      // ラウンド結果からの自動進行直後は、準備ポップアップを重ねて出さない
       if (skipNextGetReady) {
         skipNextGetReady = false;
         runHumanTurn(player);
         return;
       }
 
-      const isHotSeat = players.length === 2 && !players.some((p) => p.isBot);
-      const message = isHotSeat
-        ? `${player.name} の番です。準備ができたら端末を渡してください。`
-        : `${player.name} の番です。まもなく開始します。`;
-
-      showGetReady(message, () => runHumanTurn(player));
+      showGetReady(`次は ${player.name} の番`, () => runHumanTurn(player));
     }
 
     function showGetReady(message, onDone) {
@@ -330,6 +314,12 @@
       const label = document.querySelector("#handoffCountdownLabel");
       label.textContent = `${getReadySecondsLeft}秒後にはじまります`;
       showOverlay("handoffOverlay");
+
+      // ラウンド結果ポップアップと同じプログレスバー演出でカウントダウンを見せる
+      const fill = document.querySelector("#getReadyFill");
+      fill.style.animation = "none";
+      void fill.offsetWidth; // reflow させてアニメーションを最初から再生する
+      fill.style.animation = `shrink-bar ${GET_READY_SECONDS}s linear forwards`;
 
       const finish = () => {
         clearInterval(getReadyTimerHandle);
@@ -375,7 +365,7 @@
     function runBotTurn(player) {
       document.querySelector("#inputArea").classList.add("hidden");
       document.querySelector("#botThinking").classList.remove("hidden");
-      document.querySelector("#botThinking").textContent = "BOTが考え中...";
+      document.querySelector("#botThinking").textContent = "CPUが考え中...";
       document.querySelector("#roundLabel").textContent = `ラウンド ${roundNumber}`;
       document.querySelector("#turnLabel").textContent = `${player.name} のターン`;
       document.querySelector("#seedWordLabel").textContent = seedWord;
@@ -386,7 +376,7 @@
 
       apiGet(`/battle/bot-turn?previousWord=${encodeURIComponent(seedWord)}&exclude=${encodeURIComponent(playerHistory[turnIndex].join(","))}`)
         .then((result) => {
-          // BOTが選んだ単語を15秒の間に少しずつ「入力中」のように表示する
+          // CPUが選んだ単語を15秒の間に少しずつ「入力中」のように表示する
           const words = result.words;
           const step = words.length > 0 ? BOT_REVEAL_WINDOW_MS / words.length : 0;
           let revealedTotal = 0;
@@ -407,7 +397,7 @@
           });
 
           if (words.length === 0) {
-            document.querySelector("#botThinking").textContent = "BOTは単語を出せませんでした";
+            document.querySelector("#botThinking").textContent = "CPUは単語を出せませんでした";
           }
 
           runTimer(() => endTurn(result.totalLength));
@@ -547,17 +537,6 @@
       renderHp();
       setActiveFighter(-1);
 
-      // 次の番の案内をこの画面に統合する(次は常にplayers[0]から)
-      const stillAlive = players[0].hp > 0 && players[1].hp > 0;
-      if (stillAlive) {
-        const isHotSeat = players.length === 2 && !players.some((p) => p.isBot);
-        document.querySelector("#nextUpLabel").textContent = isHotSeat
-          ? `次は ${players[0].name} の番です。端末を渡してください。`
-          : `次は ${players[0].name} の番です`;
-      } else {
-        document.querySelector("#nextUpLabel").textContent = "";
-      }
-
       showOverlay("roundResultOverlay");
       startRoundResultAutoAdvance();
     }
@@ -584,16 +563,9 @@
       }, 1000);
     }
 
-    // 試合を途中で切り上げて対戦トップページ(モード選択)に戻る
+    // 試合を途中で切り上げてトップページ(モード選択)に戻る
     function returnToBattleTop() {
-      clearInterval(roundResultTimerHandle);
-      clearInterval(getReadyTimerHandle);
-      clearInterval(timerHandle);
-      botRevealTimeouts.forEach((handle) => clearTimeout(handle));
-      botRevealTimeouts = [];
-      hideOverlay("roundResultOverlay");
-      hideOverlay("handoffOverlay");
-      showScreen("modeSelectScreen");
+      location.href = "/";
     }
 
     function nextRoundOrEnd() {
@@ -615,8 +587,6 @@
       startRound();
     }
 
-    document.querySelector("#startBotButton").onclick = () => startMode("bot");
-    document.querySelector("#startHumanButton").onclick = () => startMode("human");
     document.querySelector("#submitWordButton").onclick = submitWord;
     document.querySelector("#wordInput").addEventListener("keydown", (e) => {
       if (e.key === "Enter") submitWord();
@@ -624,11 +594,16 @@
     document.querySelector("#nextRoundButton").onclick = nextRoundOrEnd;
     document.querySelector("#backToTopButton").onclick = returnToBattleTop;
     document.querySelector("#playAgainButton").onclick = () => {
-      hideOverlay("gameOverOverlay");
-      showScreen("modeSelectScreen");
+      location.href = "/";
     };
 
-    showScreen("modeSelectScreen");
+    // モードはトップページ(index.html)の選択画面から ?mode=bot / ?mode=human で渡ってくる
+    const requestedMode = new URLSearchParams(location.search).get("mode");
+    if (requestedMode === "bot" || requestedMode === "human") {
+      startMode(requestedMode);
+    } else {
+      location.href = "/";
+    }
   </script>
 </body>
 </html>

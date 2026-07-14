@@ -55,10 +55,6 @@ body.battle-page .app-title {
   text-shadow: 2px 2px 0 #c0392b;
 }
 
-body.battle-page .app-title span {
-  color: #fff;
-}
-
 body.battle-page .ghost-link {
   font-size: 0.8rem;
   color: #cbb8ff;

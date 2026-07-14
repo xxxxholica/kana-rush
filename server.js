@@ -283,7 +283,7 @@ Deno.serve(async (_req) => {
     });
   }
 
-  // GET /battle/bot-turn: BOTの1ターン分(複数語のチェーン)をまとめて生成する
+  // GET /battle/bot-turn: CPUの1ターン分(複数語のチェーン)をまとめて生成する
   if (_req.method === "GET" && pathname === "/battle/bot-turn") {
     const searchParams = new URL(_req.url).searchParams;
     const previousWord = searchParams.get("previousWord") ?? "";

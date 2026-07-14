@@ -3,23 +3,26 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>かなラッシュ練習モード</title>
+  <title>かなラッシュ</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body class="battle-page">
   <div class="app-shell">
     <header class="app-header">
-      <h1 class="app-title">かなラッシュ<span>練習</span>モード</h1>
-      <a class="ghost-link" href="/battle.html">対戦モードへ →</a>
+      <h1 class="app-title">かなラッシュ</h1>
     </header>
 
     <section id="startScreen" class="screen screen-card">
       <div id="modeSelectTeaser">
         <img src="material/music_rapper_woman.png" alt="">
+        <span class="vs-badge">VS</span>
+        <img src="material/rapper.png" alt="">
       </div>
-      <p class="lead-text">60秒のタイムアタック。しりとりをできるだけ長く繋いで、獲得文字数のスコアを競おう。「ん」で終わる単語や、一度使った単語を入力すると即終了。</p>
+      <p class="lead-text">かなでつなぐしりとりゲーム。ひとりで練習するか、CPUやオフラインの相手と対戦しよう。</p>
       <div class="cta-stack">
-        <button id="startPracticeButton" class="btn btn-primary">スタート</button>
+        <button id="startPracticeButton" class="btn btn-primary">練習する</button>
+        <button id="startBotBattleButton" class="btn btn-secondary">CPUと対戦する</button>
+        <button id="startOfflineBattleButton" class="btn btn-secondary">２人で対戦する</button>
       </div>
     </section>
 
@@ -32,14 +35,21 @@
       </div>
 
       <div class="turn-info-bar">
-        <span id="scoreLabel" class="pill pill-accent"></span>
         <span id="wordCountLabel" class="pill"></span>
       </div>
 
       <div class="timer-row">
-        <div class="timer-badge" id="practiceTimerBadge">
-          <span id="practiceTimerValue">60</span>
+        <div class="timer-badge square-badge" id="practiceTimerBadge">
           <span class="timer-unit">秒</span>
+          <span id="practiceTimerValue">60</span>
+        </div>
+        <div class="total-char-badge square-badge" title="獲得文字数">
+          <span class="total-char-label">計</span>
+          <span id="practiceScoreValue">0</span>
+        </div>
+        <div class="next-char-badge square-badge" id="practiceNextCharBadge" title="次の頭文字">
+          <span class="next-char-label">次</span>
+          <span id="practiceNextCharValue"></span>
         </div>
         <div class="prompt-card">
           <div class="prompt-line">
@@ -57,7 +67,6 @@
 
       <div class="chip-list-header">
         <span>これまでの単語</span>
-        <span class="stat-badge"><span id="practiceScoreValue">0</span> 文字</span>
       </div>
       <ul id="practiceWordList" class="word-chip-list"></ul>
     </section>
@@ -82,6 +91,49 @@
 
   <script>
     const PRACTICE_SECONDS = 60;
+
+    // server.js の VOWEL_MAP / effectiveLastChar と同じ内容(表示専用のクライアント側コピー、
+    // battle.html と同一)。「ー」で終わる単語は直前の音の母音が実際の継続文字になる。
+    const VOWEL_MAP = {
+      あ: "あ", か: "あ", が: "あ", さ: "あ", ざ: "あ", た: "あ", だ: "あ",
+      な: "あ", は: "あ", ば: "あ", ぱ: "あ", ま: "あ", や: "あ", ら: "あ",
+      わ: "あ", ぁ: "あ", ゃ: "あ",
+      い: "い", き: "い", ぎ: "い", し: "い", じ: "い", ち: "い", ぢ: "い",
+      に: "い", ひ: "い", び: "い", ぴ: "い", み: "い", り: "い", ゐ: "い",
+      ぃ: "い",
+      う: "う", く: "う", ぐ: "う", す: "う", ず: "う", つ: "う", づ: "う",
+      ぬ: "う", ふ: "う", ぶ: "う", ぷ: "う", む: "う", ゆ: "う", る: "う",
+      ぅ: "う", ゅ: "う",
+      え: "え", け: "え", げ: "え", せ: "え", ぜ: "え", て: "え", で: "え",
+      ね: "え", へ: "え", べ: "え", ぺ: "え", め: "え", れ: "え", ゑ: "え",
+      ぇ: "え",
+      お: "お", こ: "お", ご: "お", そ: "お", ぞ: "お", と: "お", ど: "お",
+      の: "お", ほ: "お", ぼ: "お", ぽ: "お", も: "お", よ: "お", ろ: "お",
+      を: "お", ぉ: "お", ょ: "お",
+    };
+
+    function effectiveLastChar(word) {
+      if (!word) return "";
+      if (word.slice(-1) === "ー" && word.length >= 2) {
+        const vowel = VOWEL_MAP[word[word.length - 2]];
+        if (vowel) return vowel;
+      }
+      return word.slice(-1);
+    }
+
+    // 次に入力すべき頭文字をタイマー隣に1文字だけ表示する(battle.html と共通の見た目)
+    function updateNextChar() {
+      document.querySelector("#practiceNextCharValue").textContent = effectiveLastChar(currentWord);
+    }
+
+    document.querySelector("#practiceNextCharBadge").onclick = () => {
+      const input = document.querySelector("#practiceWordInput");
+      const nextChar = document.querySelector("#practiceNextCharValue").textContent;
+      if (input && !input.disabled && nextChar) {
+        input.value = nextChar;
+        input.focus();
+      }
+    };
 
     let currentWord = "";
     let score = 0;
@@ -163,13 +215,13 @@
       document.querySelector("#practiceScoreValue").textContent = "0";
       document.querySelector("#practiceWordList").innerHTML = "";
       document.querySelector("#practiceErrorMessage").textContent = "";
-      document.querySelector("#scoreLabel").textContent = "スコア 0";
       document.querySelector("#wordCountLabel").textContent = "0 語";
 
       const response = await fetch("/reset", { method: "POST" });
       const data = await response.json();
       currentWord = data.word;
       document.querySelector("#practiceCurrentWord").textContent = currentWord;
+      updateNextChar();
 
       const input = document.querySelector("#practiceWordInput");
       input.value = "";
@@ -216,10 +268,10 @@
       document.querySelector("#practiceErrorMessage").textContent = "";
       currentWord = data.word;
       document.querySelector("#practiceCurrentWord").textContent = currentWord;
+      updateNextChar();
       wordList.push(currentWord);
       score += currentWord.length;
       document.querySelector("#practiceScoreValue").textContent = String(score);
-      document.querySelector("#scoreLabel").textContent = `スコア ${score}`;
       document.querySelector("#wordCountLabel").textContent = `${wordList.length} 語`;
       renderWordChips();
       resumeTimer();
@@ -235,6 +287,12 @@
     }
 
     document.querySelector("#startPracticeButton").onclick = startPractice;
+    document.querySelector("#startBotBattleButton").onclick = () => {
+      location.href = "/battle.html?mode=bot";
+    };
+    document.querySelector("#startOfflineBattleButton").onclick = () => {
+      location.href = "/battle.html?mode=human";
+    };
     document.querySelector("#practiceSubmitButton").onclick = submitPracticeWord;
     document.querySelector("#practiceWordInput").addEventListener("keydown", (e) => {
       if (e.key === "Enter") submitPracticeWord();
