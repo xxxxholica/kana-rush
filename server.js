@@ -1,4 +1,5 @@
 import { serveDir } from "jsr:@std/http/file-server";
+import { generateBotTurn, pickRandomSeed } from "./wordBank.js";
 
 // 初期語の候補(「ん」で終わらない、ひらがなのみ、2文字以上)
 const initialWordPool = [
@@ -27,6 +28,36 @@ function toHiragana(str) {
   );
 }
 
+// \u5404\u304b\u306a\u304c\u5c5e\u3059\u308b\u6bcd\u97f3(\u3042/\u3044/\u3046/\u3048/\u304a)\u306e\u5bfe\u5fdc\u8868\u3002\u300c\u30fc\u300d\u3067\u7d42\u308f\u308b\u5358\u8a9e\u306e
+// \u3057\u308a\u3068\u308a\u63a5\u7d9a\u5224\u5b9a\u306b\u4f7f\u3046(\u4f8b: \u300c\u30b3\u30fc\u30d2\u30fc\u300d\u306f\u76f4\u524d\u306e\u300c\u3072\u300d\u306e\u6bcd\u97f3\u300c\u3044\u300d\u3067\u7d99\u7d9a\u3059\u308b)
+const VOWEL_MAP = {
+  \u3042: "\u3042", \u304b: "\u3042", \u304c: "\u3042", \u3055: "\u3042", \u3056: "\u3042", \u305f: "\u3042", \u3060: "\u3042",
+  \u306a: "\u3042", \u306f: "\u3042", \u3070: "\u3042", \u3071: "\u3042", \u307e: "\u3042", \u3084: "\u3042", \u3089: "\u3042",
+  \u308f: "\u3042", \u3041: "\u3042", \u3083: "\u3042",
+  \u3044: "\u3044", \u304d: "\u3044", \u304e: "\u3044", \u3057: "\u3044", \u3058: "\u3044", \u3061: "\u3044", \u3062: "\u3044",
+  \u306b: "\u3044", \u3072: "\u3044", \u3073: "\u3044", \u3074: "\u3044", \u307f: "\u3044", \u308a: "\u3044", \u3090: "\u3044",
+  \u3043: "\u3044",
+  \u3046: "\u3046", \u304f: "\u3046", \u3050: "\u3046", \u3059: "\u3046", \u305a: "\u3046", \u3064: "\u3046", \u3065: "\u3046",
+  \u306c: "\u3046", \u3075: "\u3046", \u3076: "\u3046", \u3077: "\u3046", \u3080: "\u3046", \u3086: "\u3046", \u308b: "\u3046",
+  \u3045: "\u3046", \u3085: "\u3046",
+  \u3048: "\u3048", \u3051: "\u3048", \u3052: "\u3048", \u305b: "\u3048", \u305c: "\u3048", \u3066: "\u3048", \u3067: "\u3048",
+  \u306d: "\u3048", \u3078: "\u3048", \u3079: "\u3048", \u307a: "\u3048", \u3081: "\u3048", \u308c: "\u3048", \u3091: "\u3048",
+  \u3047: "\u3048",
+  \u304a: "\u304a", \u3053: "\u304a", \u3054: "\u304a", \u305d: "\u304a", \u305e: "\u304a", \u3068: "\u304a", \u3069: "\u304a",
+  \u306e: "\u304a", \u307b: "\u304a", \u307c: "\u304a", \u307d: "\u304a", \u3082: "\u304a", \u3088: "\u304a", \u308d: "\u304a",
+  \u3092: "\u304a", \u3049: "\u304a", \u3087: "\u304a",
+};
+
+// \u3057\u308a\u3068\u308a\u306e\u63a5\u7d9a\u5224\u5b9a\u306b\u4f7f\u3046\u300c\u5b9f\u8cea\u7684\u306a\u672b\u5c3e\u306e\u6587\u5b57\u300d\u3092\u6c42\u3081\u308b\u3002
+// \u300c\u30fc\u300d\u3067\u7d42\u308f\u308b\u5834\u5408\u306f\u3001\u76f4\u524d\u306e\u6587\u5b57\u306e\u6bcd\u97f3\u306b\u5909\u63db\u3059\u308b\u3002
+function effectiveLastChar(word) {
+  if (word.slice(-1) === "\u30fc" && word.length >= 2) {
+    const vowel = VOWEL_MAP[word[word.length - 2]];
+    if (vowel) return vowel;
+  }
+  return word.slice(-1);
+}
+
 // Jisho.org の公式APIを使って実在する単語か確認する
 async function isRealWord(word) {
   const url =
@@ -45,6 +76,67 @@ async function isRealWord(word) {
     // ネットワークエラー時も判定をスキップして許可する
     return true;
   }
+}
+
+// Jisho.org で表記(漢字混じり等)から読み(ひらがな)を引く。Macの自動変換で
+// 漢字入力になった場合でも遊べるようにするための変換。
+async function lookupReading(rawWord) {
+  const url =
+    `https://jisho.org/api/v1/search/words?keyword=${encodeURIComponent(rawWord)}`;
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return { ok: false, networkError: true };
+    const json = await response.json();
+    for (const entry of json.data) {
+      for (const j of entry.japanese) {
+        if (j.word === rawWord && j.reading) {
+          return { ok: true, reading: toHiragana(j.reading) };
+        }
+      }
+    }
+    return { ok: false, networkError: false };
+  } catch {
+    return { ok: false, networkError: true };
+  }
+}
+
+// 入力(ひらがな・カタカナ・漢字混じり)を判定し、ひらがなの単語に正規化する。
+// かな入力ならそのまま実在チェック、漢字混じりならJishoで読みを引いて変換する。
+async function resolveWord(rawWord) {
+  if (isKanaOnly(rawWord)) {
+    if (rawWord.length < 2) {
+      return { ok: false, errorMessage: "1文字の単語は使用できません", errorCode: "10006" };
+    }
+    const word = toHiragana(rawWord);
+    if (!(await isRealWord(word))) {
+      return {
+        ok: false,
+        errorMessage: "実在しない単語の可能性があります",
+        errorCode: "10005",
+      };
+    }
+    return { ok: true, word };
+  }
+
+  const looked = await lookupReading(rawWord);
+  if (!looked.ok) {
+    if (looked.networkError) {
+      return {
+        ok: false,
+        errorMessage: "読み方を確認できませんでした。ひらがな・カタカナで入力してください",
+        errorCode: "10010",
+      };
+    }
+    return {
+      ok: false,
+      errorMessage: "実在しない単語の可能性があります",
+      errorCode: "10005",
+    };
+  }
+  if (looked.reading.length < 2) {
+    return { ok: false, errorMessage: "1文字の単語は使用できません", errorCode: "10006" };
+  }
+  return { ok: true, word: looked.reading };
 }
 
 function makeErrorResponse(errorMessage, errorCode, extra = {}) {
@@ -67,6 +159,38 @@ function makeSuccessResponse() {
   );
 }
 
+function makeJsonResponse(body) {
+  return new Response(JSON.stringify(body), {
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+  });
+}
+
+// バトルモード用: 単語1つの妥当性を判定する(グローバル履歴は使わずステートレスに判定)
+async function validateBattleWord(previousWord, rawWord, exclude) {
+  if (!rawWord) {
+    return { ok: false, errorMessage: "単語を入力してください", errorCode: "10007" };
+  }
+
+  const resolved = await resolveWord(rawWord);
+  if (!resolved.ok) return resolved;
+  const word = resolved.word;
+
+  if (effectiveLastChar(previousWord) !== word.slice(0, 1)) {
+    return { ok: false, errorMessage: "前の単語に続いていません", errorCode: "10001" };
+  }
+  if (exclude.includes(word)) {
+    return {
+      ok: false,
+      errorMessage: "この対戦で既に使われた単語です",
+      errorCode: "10008",
+    };
+  }
+
+  // 「ん」で終わる単語は正当な一手として受理するが、以降続けられないため
+  // 呼び出し側(バトルモード)でそのターンを即座に終了させる
+  return { ok: true, word, length: word.length, endsInN: word.slice(-1) === "ん" };
+}
+
 Deno.serve(async (_req) => {
   const pathname = new URL(_req.url).pathname;
 
@@ -86,31 +210,16 @@ Deno.serve(async (_req) => {
       return makeErrorResponse("単語を入力してください", "10007");
     }
 
-    // 1文字の単語はしりとりとして不適切
-    if (rawNextWord.length < 2) {
-      return makeErrorResponse("1文字の単語は使用できません", "10006");
+    // ひらがな・カタカナはそのまま、漢字混じりはJishoで読みを引いてひらがなに正規化する
+    const resolved = await resolveWord(rawNextWord);
+    if (!resolved.ok) {
+      return makeErrorResponse(resolved.errorMessage, resolved.errorCode);
     }
+    const nextWord = resolved.word;
 
-    // ひらがな・カタカナ以外の文字が含まれる場合はエラー
-    if (!isKanaOnly(rawNextWord)) {
-      return makeErrorResponse(
-        "ひらがな・カタカナのみで入力してください",
-        "10004",
-      );
-    }
-
-    // カタカナ入力をひらがなに正規化してから以降の処理を行う
-    const nextWord = toHiragana(rawNextWord);
-
-    // previousWordの末尾とnextWordの先頭が同一か確認
-    if (previousWord.slice(-1) !== nextWord.slice(0, 1)) {
+    // previousWordの末尾とnextWordの先頭が同一か確認(「ー」で終わる場合は直前の母音で継続する)
+    if (effectiveLastChar(previousWord) !== nextWord.slice(0, 1)) {
       return makeErrorResponse("前の単語に続いていません", "10001");
-    }
-
-    // 実在する単語か確認(外部API連携)
-    const wordExists = await isRealWord(nextWord);
-    if (!wordExists) {
-      return makeErrorResponse("実在しない単語の可能性があります", "10005");
     }
 
     // 過去に使用した単語かチェック
@@ -142,6 +251,47 @@ Deno.serve(async (_req) => {
   if (_req.method === "POST" && pathname === "/reset") {
     wordHistories = [pickRandomInitialWord()];
     return makeSuccessResponse();
+  }
+
+  // GET /battle/random-word: ラウンドの起点となる単語をランダムに返す(バトルモード用、ステートレス)
+  if (_req.method === "GET" && pathname === "/battle/random-word") {
+    const exclude = (new URL(_req.url).searchParams.get("exclude") ?? "")
+      .split(",")
+      .filter(Boolean);
+    const word = pickRandomSeed(exclude);
+    if (!word) {
+      return makeErrorResponse("選べる単語がありません", "10009");
+    }
+    return makeJsonResponse({ word });
+  }
+
+  // POST /battle/validate-word: バトルモードの単語1つを判定する(グローバル履歴には影響しない)
+  if (_req.method === "POST" && pathname === "/battle/validate-word") {
+    const requestJson = await _req.json();
+    const previousWord = requestJson["previousWord"];
+    const rawWord = requestJson["word"];
+    const exclude = requestJson["exclude"] ?? [];
+
+    const result = await validateBattleWord(previousWord, rawWord, exclude);
+    if (!result.ok) {
+      return makeErrorResponse(result.errorMessage, result.errorCode);
+    }
+    return makeJsonResponse({
+      word: result.word,
+      length: result.length,
+      endsInN: result.endsInN,
+    });
+  }
+
+  // GET /battle/bot-turn: BOTの1ターン分(複数語のチェーン)をまとめて生成する
+  if (_req.method === "GET" && pathname === "/battle/bot-turn") {
+    const searchParams = new URL(_req.url).searchParams;
+    const previousWord = searchParams.get("previousWord") ?? "";
+    const exclude = (searchParams.get("exclude") ?? "")
+      .split(",")
+      .filter(Boolean);
+    const result = generateBotTurn(previousWord, exclude);
+    return makeJsonResponse(result);
   }
 
   // ./public以下のファイルを公開

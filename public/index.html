@@ -3,90 +3,248 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>しりとり</title>
+  <title>かなラッシュ練習モード</title>
   <link rel="stylesheet" href="styles.css">
 </head>
-<body>
-  <h1>しりとり</h1>
+<body class="battle-page">
+  <div class="app-shell">
+    <header class="app-header">
+      <h1 class="app-title">かなラッシュ<span>練習</span>モード</h1>
+      <a class="ghost-link" href="/battle.html">対戦モードへ →</a>
+    </header>
 
-  <p id="previousWord"></p>
-  <p id="gameOverMessage"></p>
+    <section id="startScreen" class="screen screen-card">
+      <div id="modeSelectTeaser">
+        <img src="material/music_rapper_woman.png" alt="">
+      </div>
+      <p class="lead-text">60秒のタイムアタック。しりとりをできるだけ長く繋いで、獲得文字数のスコアを競おう。「ん」で終わる単語や、一度使った単語を入力すると即終了。</p>
+      <div class="cta-stack">
+        <button id="startPracticeButton" class="btn btn-primary">スタート</button>
+      </div>
+    </section>
 
-  <div id="inputArea">
-    <input id="nextWordInput" type="text" />
-    <button id="nextWordSendButton">送信</button>
+    <section id="practiceScreen" class="screen screen-card hidden">
+      <div id="battleStage" class="single-stage">
+        <div class="fighter active-turn" id="practiceFighter">
+          <div class="fighter-portrait"><img src="material/music_rapper_woman.png" alt=""></div>
+          <div class="fighter-name">あなた</div>
+        </div>
+      </div>
+
+      <div class="turn-info-bar">
+        <span id="scoreLabel" class="pill pill-accent"></span>
+        <span id="wordCountLabel" class="pill"></span>
+      </div>
+
+      <div class="timer-row">
+        <div class="timer-badge" id="practiceTimerBadge">
+          <span id="practiceTimerValue">60</span>
+          <span class="timer-unit">秒</span>
+        </div>
+        <div class="prompt-card">
+          <div class="prompt-line">
+            <span class="prompt-label">現在</span>
+            <span id="practiceCurrentWord" class="prompt-word prompt-word-current"></span>
+          </div>
+        </div>
+      </div>
+
+      <div id="practiceInputArea" class="input-row">
+        <input id="practiceWordInput" type="text" autocomplete="off" placeholder="つづく単語を入力...">
+        <button id="practiceSubmitButton" class="btn btn-primary btn-compact">送信</button>
+      </div>
+      <p id="practiceErrorMessage" class="error-message"></p>
+
+      <div class="chip-list-header">
+        <span>これまでの単語</span>
+        <span class="stat-badge"><span id="practiceScoreValue">0</span> 文字</span>
+      </div>
+      <ul id="practiceWordList" class="word-chip-list"></ul>
+    </section>
   </div>
 
-  <button id="resetSendButton">リセット</button>
+  <!-- ポップアップ: 結果(タイムアップ・「ん」・既出語のいずれでも表示) -->
+  <div id="resultOverlay" class="modal-overlay hidden">
+    <div class="modal-card screen-card">
+      <p class="eyebrow">RESULT</p>
+      <h2 id="resultTitle" class="section-title"></h2>
+      <p class="caption" id="resultDetail"></p>
+      <div class="cta-stack">
+        <button id="retryButton" class="btn btn-primary">もう一度挑戦する</button>
+      </div>
+    </div>
+  </div>
 
-  <h2>履歴</h2>
-  <ul id="historyList"></ul>
+  <!-- 「んワード」「同じワード」を画面中央に大きく演出(対戦モードと共通) -->
+  <div id="failureFlash" class="failure-flash hidden">
+    <span id="failureFlashText"></span>
+  </div>
 
   <script>
-    function updateDisplay(data) {
-      document.querySelector("#previousWord").innerHTML = `前の単語: ${data.word}`;
-      renderHistory(data.wordHistories);
+    const PRACTICE_SECONDS = 60;
+
+    let currentWord = "";
+    let score = 0;
+    let wordList = [];
+    let timerHandle = null;
+    let timeLeft = PRACTICE_SECONDS;
+
+    function showScreen(id) {
+      document.querySelectorAll(".screen").forEach((el) => el.classList.add("hidden"));
+      document.querySelector(`#${id}`).classList.remove("hidden");
     }
 
-    function renderHistory(wordHistories) {
-      const list = document.querySelector("#historyList");
-      list.innerHTML = "";
-      wordHistories.forEach((word) => {
-        const li = document.createElement("li");
-        li.textContent = word;
-        list.appendChild(li);
-      });
+    function showOverlay(id) {
+      document.querySelector(`#${id}`).classList.remove("hidden");
     }
 
-    function endGame(errorMessage, wordHistories) {
-      alert(errorMessage);
-      if (wordHistories) {
-        renderHistory(wordHistories);
-        document.querySelector("#previousWord").innerHTML =
-          `前の単語: ${wordHistories[wordHistories.length - 1]}`;
+    function hideOverlay(id) {
+      document.querySelector(`#${id}`).classList.add("hidden");
+    }
+
+    let failureFlashTimeout = null;
+
+    // 「同じワード」「んワード」を画面中央に大きく表示する(対戦モードと共通の演出)
+    function showFailureFlash(text) {
+      const el = document.querySelector("#failureFlash");
+      clearTimeout(failureFlashTimeout);
+      el.classList.remove("hidden", "flash-anim");
+      document.querySelector("#failureFlashText").textContent = text;
+      void el.offsetWidth; // reflow させてアニメーションを最初から再生する
+      el.classList.add("flash-anim");
+      failureFlashTimeout = setTimeout(() => {
+        el.classList.add("hidden");
+        el.classList.remove("flash-anim");
+      }, 1100);
+    }
+
+    function renderWordChips() {
+      document.querySelector("#practiceWordList").innerHTML = wordList
+        .map((w) => `<li class="word-chip">${w}<span class="chip-count">${w.length}</span></li>`)
+        .join("");
+    }
+
+    function tickTimer() {
+      timeLeft -= 1;
+      const badge = document.querySelector("#practiceTimerBadge");
+      const shown = Math.max(timeLeft, 0);
+      document.querySelector("#practiceTimerValue").textContent = String(shown);
+      badge.classList.toggle("timer-warning", shown <= 15 && shown > 5);
+      badge.classList.toggle("timer-critical", shown <= 5);
+      if (timeLeft <= 0) {
+        clearInterval(timerHandle);
+        endRun("タイムアップ！");
       }
-      document.querySelector("#gameOverMessage").innerHTML = "ゲーム終了！";
-      document.querySelector("#inputArea").style.display = "none";
     }
 
-    window.onload = async () => {
-      const response = await fetch("/shiritori", { method: "GET" });
-      const data = await response.json();
-      updateDisplay(data);
-    };
+    function runTimer() {
+      clearInterval(timerHandle);
+      timeLeft = PRACTICE_SECONDS;
+      const badge = document.querySelector("#practiceTimerBadge");
+      badge.classList.remove("timer-warning", "timer-critical");
+      document.querySelector("#practiceTimerValue").textContent = String(timeLeft);
+      timerHandle = setInterval(tickTimer, 1000);
+    }
 
-    document.querySelector("#nextWordSendButton").onclick = async () => {
-      const nextWordInput = document.querySelector("#nextWordInput");
-      const nextWordInputText = nextWordInput.value;
+    // 単語判定の通信中はタイマーを止め、結果が返ってきたら再開する
+    function pauseTimer() {
+      clearInterval(timerHandle);
+    }
+
+    function resumeTimer() {
+      if (timeLeft > 0) {
+        timerHandle = setInterval(tickTimer, 1000);
+      }
+    }
+
+    async function startPractice() {
+      score = 0;
+      wordList = [];
+      document.querySelector("#practiceScoreValue").textContent = "0";
+      document.querySelector("#practiceWordList").innerHTML = "";
+      document.querySelector("#practiceErrorMessage").textContent = "";
+      document.querySelector("#scoreLabel").textContent = "スコア 0";
+      document.querySelector("#wordCountLabel").textContent = "0 語";
+
+      const response = await fetch("/reset", { method: "POST" });
+      const data = await response.json();
+      currentWord = data.word;
+      document.querySelector("#practiceCurrentWord").textContent = currentWord;
+
+      const input = document.querySelector("#practiceWordInput");
+      input.value = "";
+      input.disabled = false;
+
+      showScreen("practiceScreen");
+      input.focus();
+      runTimer();
+    }
+
+    async function submitPracticeWord() {
+      const input = document.querySelector("#practiceWordInput");
+      const word = input.value;
+      input.value = "";
+      if (!word) return;
+
+      pauseTimer();
 
       const response = await fetch("/shiritori", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nextWord: nextWordInputText }),
+        body: JSON.stringify({ nextWord: word }),
       });
+      const data = await response.json();
 
       if (response.status !== 200) {
-        const errorObj = await response.json();
+        document.querySelector("#practiceErrorMessage").textContent = data.errorMessage;
 
-        if (errorObj.errorCode === "10002" || errorObj.errorCode === "10003") {
-          endGame(errorObj.errorMessage, errorObj.wordHistories);
-        } else {
-          alert(errorObj.errorMessage);
+        if (data.errorCode === "10002") {
+          showFailureFlash("同じワード！");
+          endRun("同じ単語を使ってしまいました");
+          return;
+        }
+        if (data.errorCode === "10003") {
+          showFailureFlash("「ん」ワード！");
+          endRun("「ん」で終わってしまいました");
+          return;
         }
 
-        nextWordInput.value = "";
+        resumeTimer();
         return;
       }
 
-      const data = await response.json();
-      updateDisplay(data);
-      nextWordInput.value = "";
+      document.querySelector("#practiceErrorMessage").textContent = "";
+      currentWord = data.word;
+      document.querySelector("#practiceCurrentWord").textContent = currentWord;
+      wordList.push(currentWord);
+      score += currentWord.length;
+      document.querySelector("#practiceScoreValue").textContent = String(score);
+      document.querySelector("#scoreLabel").textContent = `スコア ${score}`;
+      document.querySelector("#wordCountLabel").textContent = `${wordList.length} 語`;
+      renderWordChips();
+      resumeTimer();
+    }
+
+    function endRun(message) {
+      clearInterval(timerHandle);
+      document.querySelector("#practiceWordInput").disabled = true;
+      document.querySelector("#resultTitle").textContent = message;
+      document.querySelector("#resultDetail").textContent =
+        `スコア: ${score} 文字 / ${wordList.length} 語つなげました`;
+      showOverlay("resultOverlay");
+    }
+
+    document.querySelector("#startPracticeButton").onclick = startPractice;
+    document.querySelector("#practiceSubmitButton").onclick = submitPracticeWord;
+    document.querySelector("#practiceWordInput").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") submitPracticeWord();
+    });
+    document.querySelector("#retryButton").onclick = () => {
+      hideOverlay("resultOverlay");
+      startPractice();
     };
 
-    document.querySelector("#resetSendButton").onclick = async () => {
-      await fetch("/reset", { method: "POST" });
-      location.reload();
-    };
+    showScreen("startScreen");
   </script>
 </body>
 </html>
