@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>しりとり</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <h1>しりとり</h1>
+
+  <p id="previousWord"></p>
+  <p id="gameOverMessage"></p>
+
+  <div id="inputArea">
+    <input id="nextWordInput" type="text" />
+    <button id="nextWordSendButton">送信</button>
+  </div>
+
+  <button id="resetSendButton">リセット</button>
+
+  <h2>履歴</h2>
+  <ul id="historyList"></ul>
+
+  <script>
+    function updateDisplay(data) {
+      document.querySelector("#previousWord").innerHTML = `前の単語: ${data.word}`;
+      renderHistory(data.wordHistories);
+    }
+
+    function renderHistory(wordHistories) {
+      const list = document.querySelector("#historyList");
+      list.innerHTML = "";
+      wordHistories.forEach((word) => {
+        const li = document.createElement("li");
+        li.textContent = word;
+        list.appendChild(li);
+      });
+    }
+
+    function endGame(errorMessage, wordHistories) {
+      alert(errorMessage);
+      if (wordHistories) {
+        renderHistory(wordHistories);
+        document.querySelector("#previousWord").innerHTML =
+          `前の単語: ${wordHistories[wordHistories.length - 1]}`;
+      }
+      document.querySelector("#gameOverMessage").innerHTML = "ゲーム終了！";
+      document.querySelector("#inputArea").style.display = "none";
+    }
+
+    window.onload = async () => {
+      const response = await fetch("/shiritori", { method: "GET" });
+      const data = await response.json();
+      updateDisplay(data);
+    };
+
+    document.querySelector("#nextWordSendButton").onclick = async () => {
+      const nextWordInput = document.querySelector("#nextWordInput");
+      const nextWordInputText = nextWordInput.value;
+
+      const response = await fetch("/shiritori", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nextWord: nextWordInputText }),
+      });
+
+      if (response.status !== 200) {
+        const errorObj = await response.json();
+
+        if (errorObj.errorCode === "10002" || errorObj.errorCode === "10003") {
+          endGame(errorObj.errorMessage, errorObj.wordHistories);
+        } else {
+          alert(errorObj.errorMessage);
+        }
+
+        nextWordInput.value = "";
+        return;
+      }
+
+      const data = await response.json();
+      updateDisplay(data);
+      nextWordInput.value = "";
+    };
+
+    document.querySelector("#resetSendButton").onclick = async () => {
+      await fetch("/reset", { method: "POST" });
+      location.reload();
+    };
+  </script>
+</body>
+</html>
