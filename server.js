@@ -129,46 +129,86 @@ function effectiveLastChar(word) {
   return SMALL_KANA_MAP[last] ?? last;
 }
 
-// Jisho.org の公式APIを使って実在する単語か確認する
-async function isRealWord(word) {
+// Jisho.orgへの問い合わせをキャッシュする(同じ単語を何度も問い合わせない)。
+// TTLを設け、件数にも上限を設けて(古いものから破棄)無制限に増え続けないようにする
+const JISHO_CACHE_TTL_MS = 10 * 60 * 1000;
+const MAX_JISHO_CACHE_ENTRIES = 5000;
+const jishoCache = new Map(); // keyword -> { data, cachedAt }
+
+// 短時間にJishoへの問い合わせが集中した場合、一時的に呼び出し自体を止める簡易サーキットブレーカー。
+// 大量アクセス時に自サーバーの外部通信・Jisho側の双方への負荷が際限なく増えるのを防ぐ
+const JISHO_BREAKER_WINDOW_MS = 10 * 1000;
+const JISHO_BREAKER_MAX_CALLS = 30; // 10秒間に30回を超えたら遮断する
+let jishoCallWindowStart = Date.now();
+let jishoCallCountInWindow = 0;
+
+function isJishoBreakerOpen() {
+  const now = Date.now();
+  if (now - jishoCallWindowStart >= JISHO_BREAKER_WINDOW_MS) {
+    jishoCallWindowStart = now;
+    jishoCallCountInWindow = 0;
+  }
+  return jishoCallCountInWindow >= JISHO_BREAKER_MAX_CALLS;
+}
+
+function evictOldestJishoCacheIfFull() {
+  while (jishoCache.size >= MAX_JISHO_CACHE_ENTRIES) {
+    const oldestKey = jishoCache.keys().next().value;
+    jishoCache.delete(oldestKey);
+  }
+}
+
+// Jisho.org の検索APIをキャッシュ・サーキットブレーカー付きで呼び出す共通処理。
+// 成功時は { data: [...] }、失敗/遮断時は { networkError: true } を返す
+async function fetchJishoData(keyword) {
+  const cached = jishoCache.get(keyword);
+  if (cached && Date.now() - cached.cachedAt < JISHO_CACHE_TTL_MS) {
+    return { data: cached.data };
+  }
+  if (isJishoBreakerOpen()) {
+    return { networkError: true };
+  }
+  jishoCallCountInWindow += 1;
+
   const url =
-    `https://jisho.org/api/v1/search/words?keyword=${encodeURIComponent(word)}`;
+    `https://jisho.org/api/v1/search/words?keyword=${encodeURIComponent(keyword)}`;
   try {
     const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
-    if (!response.ok) {
-      // APIエラー時は判定をスキップして許可する(フェイルセーフ)
-      return true;
-    }
+    if (!response.ok) return { networkError: true };
     const json = await response.json();
-    return json.data.some((entry) =>
-      entry.japanese.some((j) => j.reading && toHiragana(j.reading) === word)
-    );
+    evictOldestJishoCacheIfFull();
+    jishoCache.set(keyword, { data: json.data, cachedAt: Date.now() });
+    return { data: json.data };
   } catch {
-    // ネットワークエラー時も判定をスキップして許可する
+    return { networkError: true };
+  }
+}
+
+// Jisho.org の公式APIを使って実在する単語か確認する
+async function isRealWord(word) {
+  const result = await fetchJishoData(word);
+  if (result.networkError) {
+    // APIエラー/遮断時は判定をスキップして許可する(フェイルセーフ)
     return true;
   }
+  return result.data.some((entry) =>
+    entry.japanese.some((j) => j.reading && toHiragana(j.reading) === word)
+  );
 }
 
 // Jisho.org で表記(漢字混じり等)から読み(ひらがな)を引く。Macの自動変換で
 // 漢字入力になった場合でも遊べるようにするための変換。
 async function lookupReading(rawWord) {
-  const url =
-    `https://jisho.org/api/v1/search/words?keyword=${encodeURIComponent(rawWord)}`;
-  try {
-    const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
-    if (!response.ok) return { ok: false, networkError: true };
-    const json = await response.json();
-    for (const entry of json.data) {
-      for (const j of entry.japanese) {
-        if (j.word === rawWord && j.reading) {
-          return { ok: true, reading: toHiragana(j.reading) };
-        }
+  const result = await fetchJishoData(rawWord);
+  if (result.networkError) return { ok: false, networkError: true };
+  for (const entry of result.data) {
+    for (const j of entry.japanese) {
+      if (j.word === rawWord && j.reading) {
+        return { ok: true, reading: toHiragana(j.reading) };
       }
     }
-    return { ok: false, networkError: false };
-  } catch {
-    return { ok: false, networkError: true };
   }
+  return { ok: false, networkError: false };
 }
 
 // 入力(ひらがな・カタカナ・漢字混じり)を判定し、ひらがなの単語に正規化する。
@@ -279,6 +319,9 @@ async function validateBattleWord(previousWord, rawWord, exclude) {
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX_REQUESTS = 60; // 1IPあたり1分間に60リクエストまで
 const RATE_LIMIT_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
+// IPv6は/64単位でまとめて1つの利用者とみなす、という業界慣例に合わせた上限。
+// これが無いと同一利用者が/64内でアドレスを回転させるだけで制限を回避できてしまう
+const MAX_RATE_LIMIT_BUCKETS = 20000;
 const rateLimitBuckets = new Map();
 
 function getClientIp(req, info) {
@@ -288,12 +331,41 @@ function getClientIp(req, info) {
     "unknown";
 }
 
+// "::"省略表記を展開し、8個の16bitグループの配列にする
+function expandIPv6Groups(addr) {
+  const stripped = addr.split("%")[0]; // ゾーンID(%eth0等)は除去
+  if (!stripped.includes("::")) return stripped.split(":");
+  const [head, tail] = stripped.split("::");
+  const headGroups = head ? head.split(":") : [];
+  const tailGroups = tail ? tail.split(":") : [];
+  const missing = 8 - headGroups.length - tailGroups.length;
+  return [...headGroups, ...Array(Math.max(missing, 0)).fill("0"), ...tailGroups];
+}
+
+// レート制限のキーを正規化する。IPv6は/64プレフィックス単位にまとめることで、
+// 同一利用者がアドレスを回転させて制限を回避することを防ぐ(IPv4はそのまま)
+function normalizeRateLimitKey(ip) {
+  if (!ip.includes(":")) return ip;
+  const groups = expandIPv6Groups(ip);
+  return groups.slice(0, 4).join(":") + "::/64";
+}
+
+// 上限に達している場合、最も古いバケットから破棄する(Mapは挿入順を保持する)
+function evictOldestRateLimitBucketsIfFull() {
+  while (rateLimitBuckets.size >= MAX_RATE_LIMIT_BUCKETS) {
+    const oldestKey = rateLimitBuckets.keys().next().value;
+    rateLimitBuckets.delete(oldestKey);
+  }
+}
+
 // 今回のリクエストがレート制限を超えているか判定し、そのIPのカウンタを更新する
-function isRateLimited(ip) {
+function isRateLimited(rawIp) {
+  const key = normalizeRateLimitKey(rawIp);
   const now = Date.now();
-  const bucket = rateLimitBuckets.get(ip);
+  const bucket = rateLimitBuckets.get(key);
   if (!bucket || now - bucket.windowStart >= RATE_LIMIT_WINDOW_MS) {
-    rateLimitBuckets.set(ip, { count: 1, windowStart: now });
+    if (!bucket) evictOldestRateLimitBucketsIfFull();
+    rateLimitBuckets.set(key, { count: 1, windowStart: now });
     return false;
   }
   bucket.count += 1;
