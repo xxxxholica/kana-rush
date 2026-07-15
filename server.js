@@ -12,8 +12,60 @@ function pickRandomInitialWord() {
   return initialWordPool[index];
 }
 
-// 単語の履歴を保持(末尾が現在の直前語)
-let wordHistories = [pickRandomInitialWord()];
+// 練習モードの単語履歴をブラウザ(Cookieのセッションid)ごとに保持する。
+// 同一デバイスでも別ブラウザ/シークレットウィンドウなら別セッションとして分離される
+// (同一ブラウザの複数タブは同じCookieを共有するため、その間では引き続き履歴を共有する)。
+// エントリは lastAccess を持ち、一定時間操作がなければ自動的に破棄する(メモリが増え続けないように)。
+const practiceSessions = new Map();
+const SESSION_COOKIE_NAME = "sid";
+const SESSION_TTL_MS = 6 * 60 * 60 * 1000; // 6時間操作がなければセッションを破棄する
+const SESSION_CLEANUP_INTERVAL_MS = 30 * 60 * 1000; // 30分おきに期限切れセッションを掃除する
+
+function getSessionIdFromCookie(req) {
+  const cookieHeader = req.headers.get("cookie") ?? "";
+  const match = cookieHeader.match(
+    new RegExp(`(?:^|;\\s*)${SESSION_COOKIE_NAME}=([^;]+)`),
+  );
+  return match ? match[1] : null;
+}
+
+function buildSessionCookie(sessionId) {
+  return `${SESSION_COOKIE_NAME}=${sessionId}; Path=/; HttpOnly; SameSite=Lax`;
+}
+
+// Cookieのセッションidを解決する(未発行・不明な場合は新規発行するが、履歴はまだ作らない)
+function resolveSessionId(req) {
+  const existing = getSessionIdFromCookie(req);
+  if (existing && practiceSessions.has(existing)) {
+    practiceSessions.get(existing).lastAccess = Date.now();
+    return { sessionId: existing, isNew: false };
+  }
+  return { sessionId: crypto.randomUUID(), isNew: true };
+}
+
+// リクエストからセッションの単語履歴を取得する。存在しなければ新規セッションを作成する
+function getOrCreateSession(req) {
+  const { sessionId, isNew } = resolveSessionId(req);
+  if (isNew) {
+    practiceSessions.set(sessionId, {
+      history: [pickRandomInitialWord()],
+      lastAccess: Date.now(),
+    });
+  }
+  return { sessionId, isNew, history: practiceSessions.get(sessionId).history };
+}
+
+// 一定時間操作のないセッションを破棄する(サーバーを動かし続けてもメモリが増え続けないようにするため)
+function cleanupExpiredSessions() {
+  const now = Date.now();
+  for (const [sessionId, session] of practiceSessions) {
+    if (now - session.lastAccess > SESSION_TTL_MS) {
+      practiceSessions.delete(sessionId);
+    }
+  }
+}
+
+setInterval(cleanupExpiredSessions, SESSION_CLEANUP_INTERVAL_MS);
 
 // ひらがな・カタカナ(ー含む)のみで構成されているか判定
 function isKanaOnly(word) {
@@ -53,7 +105,7 @@ async function isRealWord(word) {
   const url =
     `https://jisho.org/api/v1/search/words?keyword=${encodeURIComponent(word)}`;
   try {
-    const response = await fetch(url);
+    const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
     if (!response.ok) {
       // APIエラー時は判定をスキップして許可する(フェイルセーフ)
       return true;
@@ -74,7 +126,7 @@ async function lookupReading(rawWord) {
   const url =
     `https://jisho.org/api/v1/search/words?keyword=${encodeURIComponent(rawWord)}`;
   try {
-    const response = await fetch(url);
+    const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
     if (!response.ok) return { ok: false, networkError: true };
     const json = await response.json();
     for (const entry of json.data) {
@@ -129,23 +181,24 @@ async function resolveWord(rawWord) {
   return { ok: true, word: looked.reading };
 }
 
-function makeErrorResponse(errorMessage, errorCode, extra = {}) {
+function makeErrorResponse(errorMessage, errorCode, extra = {}, setCookie) {
+  const headers = { "Content-Type": "application/json; charset=utf-8" };
+  if (setCookie) headers["Set-Cookie"] = setCookie;
   return new Response(
     JSON.stringify({ errorMessage, errorCode, ...extra }),
-    {
-      status: 400,
-      headers: { "Content-Type": "application/json; charset=utf-8" },
-    },
+    { status: 400, headers },
   );
 }
 
-function makeSuccessResponse() {
+function makeSuccessResponse(history, setCookie) {
+  const headers = { "Content-Type": "application/json; charset=utf-8" };
+  if (setCookie) headers["Set-Cookie"] = setCookie;
   return new Response(
     JSON.stringify({
-      word: wordHistories[wordHistories.length - 1],
-      wordHistories,
+      word: history[history.length - 1],
+      wordHistories: history,
     }),
-    { headers: { "Content-Type": "application/json; charset=utf-8" } },
+    { headers },
   );
 }
 
@@ -184,63 +237,72 @@ async function validateBattleWord(previousWord, rawWord, exclude) {
 Deno.serve(async (_req) => {
   const pathname = new URL(_req.url).pathname;
 
-  // GET /shiritori: 直前の単語と履歴を返す
+  // GET /shiritori: 直前の単語と履歴を返す(ブラウザごとにCookieのセッションで分離)
   if (_req.method === "GET" && pathname === "/shiritori") {
-    return makeSuccessResponse();
+    const { history, isNew, sessionId } = getOrCreateSession(_req);
+    const setCookie = isNew ? buildSessionCookie(sessionId) : undefined;
+    return makeSuccessResponse(history, setCookie);
   }
 
   // POST /shiritori: 次の単語を受け取って判定・更新する
   if (_req.method === "POST" && pathname === "/shiritori") {
     const requestJson = await _req.json();
     const rawNextWord = requestJson["nextWord"];
-    const previousWord = wordHistories[wordHistories.length - 1];
+    const { history, isNew, sessionId } = getOrCreateSession(_req);
+    const setCookie = isNew ? buildSessionCookie(sessionId) : undefined;
+    const previousWord = history[history.length - 1];
 
     // 空文字チェック
     if (!rawNextWord) {
-      return makeErrorResponse("単語を入力してください", "10007");
+      return makeErrorResponse("単語を入力してください", "10007", {}, setCookie);
     }
 
     // ひらがな・カタカナはそのまま、漢字混じりはJishoで読みを引いてひらがなに正規化する
     const resolved = await resolveWord(rawNextWord);
     if (!resolved.ok) {
-      return makeErrorResponse(resolved.errorMessage, resolved.errorCode);
+      return makeErrorResponse(resolved.errorMessage, resolved.errorCode, {}, setCookie);
     }
     const nextWord = resolved.word;
 
     // previousWordの末尾とnextWordの先頭が同一か確認(「ー」で終わる場合は直前の母音で継続する)
     if (effectiveLastChar(previousWord) !== nextWord.slice(0, 1)) {
-      return makeErrorResponse("前の単語に続いていません", "10001");
+      return makeErrorResponse("前の単語に続いていません", "10001", {}, setCookie);
     }
 
     // 過去に使用した単語かチェック
-    if (wordHistories.includes(nextWord)) {
-      wordHistories.push(nextWord);
+    if (history.includes(nextWord)) {
+      history.push(nextWord);
       return makeErrorResponse(
         "過去に使用した単語です。ゲーム終了です",
         "10002",
-        { wordHistories },
+        { wordHistories: history },
+        setCookie,
       );
     }
 
     // 末尾が「ん」で終わる場合
     if (nextWord.slice(-1) === "ん") {
-      wordHistories.push(nextWord);
+      history.push(nextWord);
       return makeErrorResponse(
         "「ん」で終わりました。ゲーム終了です",
         "10003",
-        { wordHistories },
+        { wordHistories: history },
+        setCookie,
       );
     }
 
     // 正常な単語なら履歴に追加
-    wordHistories.push(nextWord);
-    return makeSuccessResponse();
+    history.push(nextWord);
+    return makeSuccessResponse(history, setCookie);
   }
 
   // POST /reset: 履歴を初期化する(初期語はランダムに選び直す)
   if (_req.method === "POST" && pathname === "/reset") {
-    wordHistories = [pickRandomInitialWord()];
-    return makeSuccessResponse();
+    const { sessionId, isNew } = resolveSessionId(_req);
+    const history = [pickRandomInitialWord()];
+    practiceSessions.set(sessionId, { history, lastAccess: Date.now() });
+    const setCookie = isNew ? buildSessionCookie(sessionId) : undefined;
+    return makeSuccessResponse(history, setCookie);
   }
 
   // GET /battle/random-word: ラウンドの起点となる単語をランダムに返す(バトルモード用、ステートレス)
@@ -284,10 +346,9 @@ Deno.serve(async (_req) => {
     return makeJsonResponse(result);
   }
 
-  // ./public以下のファイルを公開
+  // ./public以下のファイルを公開(同一オリジンからのみアクセスする前提のためCORSは有効化しない)
   return serveDir(_req, {
     fsRoot: "./public/",
     urlRoot: "",
-    enableCors: true,
   });
 });

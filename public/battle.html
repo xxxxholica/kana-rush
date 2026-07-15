@@ -436,6 +436,7 @@
       if (!word) return;
 
       pauseTimer();
+      input.disabled = true;
 
       const { ok, data } = await apiPostJson("/battle/validate-word", {
         previousWord: currentChainWord,
@@ -448,6 +449,8 @@
         if (data.errorCode === "10008") {
           showFailureFlash("同じワード！");
         }
+        input.disabled = false;
+        input.focus();
         resumeTimer();
         return;
       }
@@ -471,6 +474,8 @@
         return;
       }
 
+      input.disabled = false;
+      input.focus();
       resumeTimer();
     }
 
@@ -578,7 +583,7 @@
 
     document.querySelector("#submitWordButton").onclick = submitWord;
     document.querySelector("#wordInput").addEventListener("keydown", (e) => {
-      if (e.key === "Enter") submitWord();
+      if (e.key === "Enter" && !e.isComposing) submitWord();
     });
     document.querySelector("#nextRoundButton").onclick = nextRoundOrEnd;
     document.querySelector("#backToTopButton").onclick = returnToBattleTop;

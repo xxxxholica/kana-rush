@@ -192,6 +192,7 @@
       if (!word) return;
 
       pauseTimer();
+      input.disabled = true;
 
       const { ok, data } = await apiPostJson("/shiritori", { nextWord: word });
 
@@ -209,6 +210,8 @@
           return;
         }
 
+        input.disabled = false;
+        input.focus();
         resumeTimer();
         return;
       }
@@ -221,6 +224,8 @@
       document.querySelector("#practiceScoreValue").textContent = String(score);
       document.querySelector("#wordCountLabel").textContent = `${wordList.length} 語`;
       renderWordChain([initialWord, ...wordList]);
+      input.disabled = false;
+      input.focus();
       resumeTimer();
     }
 
@@ -242,7 +247,7 @@
     };
     document.querySelector("#practiceSubmitButton").onclick = submitPracticeWord;
     document.querySelector("#practiceWordInput").addEventListener("keydown", (e) => {
-      if (e.key === "Enter") submitPracticeWord();
+      if (e.key === "Enter" && !e.isComposing) submitPracticeWord();
     });
     document.querySelector("#retryButton").onclick = () => {
       hideOverlay("resultOverlay");
