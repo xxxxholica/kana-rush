@@ -4,13 +4,19 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Kana-rush</title>
+  <link rel="icon" type="image/png" href="material/rapper.png">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body class="battle-page">
   <div class="app-shell">
     <header class="app-header">
       <h1 class="app-title">Kana-rush</h1>
-      <a class="ghost-link" href="/">← トップへ戻る</a>
+      <a class="icon-button" href="/" title="トップへ戻る" aria-label="トップへ戻る">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 11l9-8 9 8" />
+          <path d="M5 10v10h14V10" />
+        </svg>
+      </a>
     </header>
 
     <!-- 対戦開始後はこの画面を常に表示したままにし、準備/結果/決着はこの上にポップアップで重ねる -->
@@ -98,7 +104,10 @@
       <p class="eyebrow">GAME SET</p>
       <div id="gameOverPortrait"></div>
       <h2 id="gameOverTitle" class="section-title game-over-title"></h2>
-      <button id="playAgainButton" class="btn btn-primary">もう一度対戦する</button>
+      <div class="cta-stack">
+        <button id="playAgainButton" class="btn btn-primary">もう一度対戦する</button>
+        <button id="gameOverBackToTopButton" class="btn btn-secondary">トップ画面に戻る</button>
+      </div>
     </div>
   </div>
 
@@ -107,32 +116,14 @@
     <span id="failureFlashText"></span>
   </div>
 
+  <script src="shared.js"></script>
   <script>
-    const START_HP = 50;
+    const START_HP = 100;
     const TURN_SECONDS = 15;
     const ROUND_RESULT_SECONDS = 5;
     const GET_READY_SECONDS = 5;
     const BOT_REVEAL_WINDOW_MS = 12000; // 15秒のうち最後の3秒は余白として残す
     const FIGHTER_IMAGES = ["material/music_rapper_woman.png", "material/rapper.png"];
-
-    // server.js の effectiveLastChar と同じ内容(表示専用のクライアント側コピー)。
-    // 「ー」で終わる単語は、伸ばしている直前の文字がそのまま次の頭文字になる
-    // (例: 「バイナリー」は直前の「り」で継続する)。
-    // 拗音(小さい文字)は単独で単語の先頭になれないため、大文字に変換する
-    // (例: 「マリアージュ」は末尾の「ゅ」ではなく「ゆ」で継続する)。
-    const SMALL_KANA_MAP = {
-      ぁ: "あ", ぃ: "い", ぅ: "う", ぇ: "え", ぉ: "お",
-      ゃ: "や", ゅ: "ゆ", ょ: "よ", っ: "つ", ゎ: "わ",
-    };
-
-    function effectiveLastChar(word) {
-      if (!word) return "";
-      if (word.slice(-1) === "ー" && word.length >= 2) {
-        return word[word.length - 2];
-      }
-      const last = word.slice(-1);
-      return SMALL_KANA_MAP[last] ?? last;
-    }
 
     // 次に入力すべき頭文字をタイマー隣に1文字だけ表示する
     function updateNextChar() {
@@ -177,27 +168,9 @@
       document.querySelector(`#${id}`).classList.remove("hidden");
     }
 
-    function showOverlay(id) {
-      document.querySelector(`#${id}`).classList.remove("hidden");
-    }
-
-    function hideOverlay(id) {
-      document.querySelector(`#${id}`).classList.add("hidden");
-    }
-
     async function apiGet(url) {
       const response = await fetch(url);
       return response.json();
-    }
-
-    async function apiPostJson(url, body) {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await response.json();
-      return { ok: response.status === 200, data };
     }
 
     function renderHp() {
@@ -233,9 +206,16 @@
       const winner = winnerIndex >= 0 ? players[winnerIndex] : null;
       document.querySelector("#gameOverTitle").textContent =
         winner ? `${winner.name} の勝利！` : "引き分け";
-      document.querySelector("#gameOverPortrait").innerHTML = winner
-        ? `<img src="${FIGHTER_IMAGES[winnerIndex]}" alt="" class="winner-portrait">`
-        : "";
+
+      const portrait = document.querySelector("#gameOverPortrait");
+      portrait.textContent = "";
+      if (winner) {
+        const img = document.createElement("img");
+        img.src = FIGHTER_IMAGES[winnerIndex];
+        img.alt = "";
+        img.className = "winner-portrait";
+        portrait.appendChild(img);
+      }
       showOverlay("gameOverOverlay");
     }
 
@@ -261,17 +241,6 @@
       });
     }
 
-    // お題から現在までの単語チェーンを直近3語の矢印つなぎで表示する(人間・CPU共通)。
-    // 更新のたびにスライドインさせて、単語が入れ替わったことがわかるようにする。
-    function renderWordChain() {
-      const chain = [seedWord, ...turnWords].filter(Boolean);
-      const el = document.querySelector("#wordChainDisplay");
-      el.textContent = chain.slice(-3).join(" → ");
-      el.classList.remove("slide-in");
-      void el.offsetWidth; // reflow させてアニメーションを最初から再生する
-      el.classList.add("slide-in");
-    }
-
     function startMode(mode) {
       players = mode === "bot"
         ? [{ name: "あなた", hp: START_HP, isBot: false }, { name: "CPU", hp: START_HP, isBot: true }]
@@ -291,7 +260,7 @@
       if (!seed.word) {
         document.querySelector("#gameOverTitle").textContent =
           "使える単語がなくなりました。ここまで！(引き分け)";
-        document.querySelector("#gameOverPortrait").innerHTML = "";
+        document.querySelector("#gameOverPortrait").textContent = "";
         showOverlay("gameOverOverlay");
         return;
       }
@@ -371,7 +340,7 @@
       document.querySelector("#inputArea").classList.remove("hidden");
       document.querySelector("#roundLabel").textContent = `ラウンド ${roundNumber}`;
       document.querySelector("#turnLabel").textContent = `${player.name} のターン`;
-      renderWordChain();
+      renderWordChain([seedWord, ...turnWords]);
       updateNextChar();
       document.querySelector("#wordErrorMessage").textContent = "";
       document.querySelector("#turnTotalLabel").textContent = "0";
@@ -388,7 +357,7 @@
       document.querySelector("#botThinking").classList.add("hidden");
       document.querySelector("#roundLabel").textContent = `ラウンド ${roundNumber}`;
       document.querySelector("#turnLabel").textContent = `${player.name} のターン`;
-      renderWordChain();
+      renderWordChain([seedWord, ...turnWords]);
       updateNextChar();
       document.querySelector("#turnTotalLabel").textContent = "0";
 
@@ -407,7 +376,7 @@
               revealedTotal += word.length;
               currentChainWord = word;
               updateNextChar();
-              renderWordChain();
+              renderWordChain([seedWord, ...turnWords]);
               applyDamage(turnIndex, word.length);
               if (checkForKnockout()) return;
               document.querySelector("#turnTotalLabel").textContent = String(revealedTotal);
@@ -460,22 +429,6 @@
       }
     }
 
-    let failureFlashTimeout = null;
-
-    // 「同じワード」「んワード」など目立たせたい失敗を画面中央に大きく表示する
-    function showFailureFlash(text) {
-      const el = document.querySelector("#failureFlash");
-      clearTimeout(failureFlashTimeout);
-      el.classList.remove("hidden", "flash-anim");
-      document.querySelector("#failureFlashText").textContent = text;
-      void el.offsetWidth; // reflow させてアニメーションを最初から再生する
-      el.classList.add("flash-anim");
-      failureFlashTimeout = setTimeout(() => {
-        el.classList.add("hidden");
-        el.classList.remove("flash-anim");
-      }, 1100);
-    }
-
     async function submitWord() {
       const input = document.querySelector("#wordInput");
       const word = input.value;
@@ -505,7 +458,7 @@
       playerHistory[turnIndex].push(data.word);
       allMentionedWords.push(data.word);
       updateNextChar();
-      renderWordChain();
+      renderWordChain([seedWord, ...turnWords]);
       applyDamage(turnIndex, data.word.length);
       if (checkForKnockout()) return;
       const total = turnWords.reduce((sum, w) => sum + w.length, 0);
@@ -534,25 +487,46 @@
       }
     }
 
+    // プレイヤー名・スコアはHTML文字列に組み込まず、DOM要素として安全に組み立てる
+    function buildResultSide(name, score, iconSrc) {
+      const wrapper = document.createElement("div");
+      wrapper.className = "result-side";
+
+      const icon = document.createElement("img");
+      icon.className = "result-icon";
+      icon.src = iconSrc;
+      icon.alt = "";
+
+      const nameEl = document.createElement("span");
+      nameEl.className = "result-name";
+      nameEl.textContent = name;
+
+      const scoreEl = document.createElement("span");
+      scoreEl.className = "result-score";
+      scoreEl.textContent = String(score);
+
+      wrapper.append(icon, nameEl, scoreEl);
+      return wrapper;
+    }
+
     function showRoundResult() {
       const [total0, total1] = roundTotals;
 
       // ダメージは各単語が決まった瞬間にリアルタイムで反映済み(applyDamage)なので、
       // ここでは結果の集計・表示のみを行う
       document.querySelector("#roundResultTitle").textContent = `ラウンド ${roundNumber} の結果`;
-      document.querySelector("#roundResultDetail").innerHTML = `
-        <div class="result-side">
-          <img class="result-icon" src="${FIGHTER_IMAGES[0]}" alt="">
-          <span class="result-name">${players[0].name}</span>
-          <span class="result-score">${total0}</span>
-        </div>
-        <span class="result-vs">VS</span>
-        <div class="result-side">
-          <img class="result-icon" src="${FIGHTER_IMAGES[1]}" alt="">
-          <span class="result-name">${players[1].name}</span>
-          <span class="result-score">${total1}</span>
-        </div>
-      `;
+
+      const vs = document.createElement("span");
+      vs.className = "result-vs";
+      vs.textContent = "VS";
+
+      const detail = document.querySelector("#roundResultDetail");
+      detail.textContent = "";
+      detail.append(
+        buildResultSide(players[0].name, total0, FIGHTER_IMAGES[0]),
+        vs,
+        buildResultSide(players[1].name, total1, FIGHTER_IMAGES[1]),
+      );
       renderHp();
       setActiveFighter(-1);
 
@@ -599,6 +573,9 @@
       startRound();
     }
 
+    // モードはトップページ(index.html)の選択画面から ?mode=bot / ?mode=human で渡ってくる
+    const requestedMode = new URLSearchParams(location.search).get("mode");
+
     document.querySelector("#submitWordButton").onclick = submitWord;
     document.querySelector("#wordInput").addEventListener("keydown", (e) => {
       if (e.key === "Enter") submitWord();
@@ -606,11 +583,11 @@
     document.querySelector("#nextRoundButton").onclick = nextRoundOrEnd;
     document.querySelector("#backToTopButton").onclick = returnToBattleTop;
     document.querySelector("#playAgainButton").onclick = () => {
-      location.href = "/";
+      hideOverlay("gameOverOverlay");
+      startMode(requestedMode);
     };
+    document.querySelector("#gameOverBackToTopButton").onclick = returnToBattleTop;
 
-    // モードはトップページ(index.html)の選択画面から ?mode=bot / ?mode=human で渡ってくる
-    const requestedMode = new URLSearchParams(location.search).get("mode");
     if (requestedMode === "bot" || requestedMode === "human") {
       startMode(requestedMode);
     } else {

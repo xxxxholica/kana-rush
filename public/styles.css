@@ -12,8 +12,7 @@ body {
 }
 
 /* =========================================================
-   MCしりとりバトル (battle.html) 専用テーマ
-   classic モード (index.html) には影響しないよう
+   Kana-rush 共通テーマ (battle.html / index.html)
    body.battle-page 配下にすべてスコープする
    ========================================================= */
 
@@ -83,20 +82,26 @@ body.battle-page .app-title {
   text-shadow: 2px 2px 0 #c0392b;
 }
 
-body.battle-page .ghost-link {
+/* トップへ戻るボタン: ホームの記号だけのシンプルな正方形ボタン。
+   .hiddenより詳細度が高くなり上書きしてしまわないよう :not(.hidden) にする */
+body.battle-page .icon-button:not(.hidden) {
   font-family: inherit;
-  font-size: 0.8rem;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: #cbb8ff;
   text-decoration: none;
   background: transparent;
   border: 1px solid rgba(203, 184, 255, 0.4);
-  border-radius: 999px;
-  padding: 4px 10px;
-  white-space: nowrap;
+  border-radius: 8px;
+  padding: 0;
   cursor: pointer;
 }
 
-body.battle-page .ghost-link:hover {
+body.battle-page .icon-button:hover {
   background: rgba(203, 184, 255, 0.12);
 }
 
@@ -170,6 +175,17 @@ body.battle-page .cta-stack {
   gap: 10px;
   max-width: 420px;
   margin: 0 auto;
+}
+
+/* トップ画面のモード選択ボタンは主役なので、他のポップアップのボタンより横長にする。
+   flexのstretchだけに頼らず、ボタン自体にもwidth:100%を明示して確実に広げる */
+body.battle-page .cta-stack-wide {
+  width: 100%;
+  max-width: 720px;
+}
+
+body.battle-page .cta-stack-wide .btn {
+  width: 100%;
 }
 
 body.battle-page .btn {
@@ -495,18 +511,23 @@ body.battle-page .input-row input:focus {
   border-color: #ffd54a;
 }
 
+/* 表示の有無やメッセージの長さで高さが変わると入力欄などが上下にずれてしまうため、
+   高さを完全に固定し、折り返しも起きないよう1行省略にする。背景色だけを出し分ける */
 body.battle-page .error-message {
   color: #ffb3b3;
-  background: rgba(255, 91, 91, 0.12);
+  background: transparent;
   border-radius: 8px;
   padding: 6px 10px;
-  min-height: 1.2em;
+  height: 32px;
+  line-height: 1.2;
   font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-body.battle-page .error-message:empty {
-  padding: 0;
-  background: transparent;
+body.battle-page .error-message:not(:empty) {
+  background: rgba(255, 91, 91, 0.12);
 }
 
 body.battle-page .bot-thinking-card {
@@ -565,11 +586,12 @@ body.battle-page .result-vs {
 
 body.battle-page .progress-bar {
   width: 100%;
+  max-width: 420px;
   height: 6px;
   background: rgba(255, 255, 255, 0.08);
   border-radius: 3px;
   overflow: hidden;
-  margin: 4px 0 2px;
+  margin: 4px auto 2px;
 }
 
 body.battle-page .progress-fill {
