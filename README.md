@@ -2,6 +2,8 @@
 
 Webブラウザ上で動作するしりとりアプリです。ひとりで練習する「練習モード」と、CPUまたはオフラインの相手と対戦する「対戦モード」を実装しています。
 
+<img width="800" alt="kana-rush" src="https://github.com/user-attachments/assets/152fa61a-459a-48ec-81d6-669efd42b029" />
+
 ## デプロイ先URL
 
 https://kanarush.hinata.works
