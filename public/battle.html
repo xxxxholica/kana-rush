@@ -3,18 +3,23 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>かなラッシュ</title>
+  <title>Kana-rush</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body class="battle-page">
   <div class="app-shell">
     <header class="app-header">
-      <h1 class="app-title">かなラッシュ</h1>
+      <h1 class="app-title">Kana-rush</h1>
       <a class="ghost-link" href="/">← トップへ戻る</a>
     </header>
 
     <!-- 対戦開始後はこの画面を常に表示したままにし、準備/結果/決着はこの上にポップアップで重ねる -->
-    <section id="battleScreen" class="screen screen-card hidden">
+    <section id="battleScreen" class="screen gameplay-screen hidden">
+      <div class="turn-info-bar">
+        <span id="roundLabel" class="pill"></span>
+        <span id="turnLabel" class="pill pill-accent"></span>
+      </div>
+
       <div id="battleStage">
         <div class="fighter" id="fighter0">
           <div class="fighter-portrait"><img src="material/music_rapper_woman.png" alt=""></div>
@@ -31,49 +36,30 @@
         </div>
       </div>
 
-      <div class="turn-info-bar">
-        <span id="roundLabel" class="pill"></span>
-        <span id="turnLabel" class="pill pill-accent"></span>
-      </div>
-
-      <div class="timer-row">
-        <div class="timer-badge square-badge" id="timerBadge">
-          <span class="timer-unit">秒</span>
-          <span id="timerValue">15</span>
-        </div>
-        <div class="total-char-badge square-badge" title="このターンの合計文字数">
-          <span class="total-char-label">計</span>
-          <span id="turnTotalLabel">0</span>
-        </div>
-        <div class="next-char-badge square-badge" id="nextCharBadge" title="次の頭文字">
-          <span class="next-char-label">次</span>
-          <span id="nextCharValue"></span>
-        </div>
-        <div class="prompt-card">
-          <div class="prompt-line">
-            <span class="prompt-label">お題</span>
-            <span id="seedWordLabel" class="prompt-word"></span>
+      <div class="battle-controls">
+        <div class="timer-row">
+          <div class="timer-badge square-badge" id="timerBadge">
+            <span class="timer-unit">秒</span>
+            <span id="timerValue" class="badge-value">15</span>
           </div>
-          <div class="prompt-line">
-            <span class="prompt-label">現在</span>
-            <span id="currentChainLabel" class="prompt-word prompt-word-current"></span>
+          <div class="total-char-badge square-badge" title="このターンの合計文字数">
+            <span class="total-char-label">計</span>
+            <span id="turnTotalLabel" class="badge-value">0</span>
           </div>
+          <div class="next-char-badge square-badge" id="nextCharBadge" title="次の頭文字">
+            <span class="next-char-label">次</span>
+            <span id="nextCharValue" class="badge-value"></span>
+          </div>
+          <div class="word-chain" id="wordChainDisplay"></div>
         </div>
-      </div>
 
-      <div id="inputArea" class="input-row">
-        <input id="wordInput" type="text" autocomplete="off" placeholder="つづく単語を入力...">
-        <button id="submitWordButton" class="btn btn-primary btn-compact">送信</button>
-      </div>
-      <p id="wordErrorMessage" class="error-message"></p>
+        <div id="inputArea" class="input-row">
+          <input id="wordInput" type="text" autocomplete="off" placeholder="つづく単語を入力...">
+          <button id="submitWordButton" class="btn btn-primary btn-compact">送信</button>
+        </div>
+        <p id="wordErrorMessage" class="error-message"></p>
 
-      <div class="chip-list-header">
-        <span>獲得した単語</span>
-      </div>
-      <ul id="turnWordList" class="word-chip-list"></ul>
-
-      <div id="botThinking" class="hidden bot-thinking-card">
-        CPUが考え中<span class="dots"><span>.</span><span>.</span><span>.</span></span>
+        <div id="botThinking" class="hidden bot-thinking-card"></div>
       </div>
     </section>
   </div>
@@ -129,33 +115,23 @@
     const BOT_REVEAL_WINDOW_MS = 12000; // 15秒のうち最後の3秒は余白として残す
     const FIGHTER_IMAGES = ["material/music_rapper_woman.png", "material/rapper.png"];
 
-    // server.js の VOWEL_MAP / effectiveLastChar と同じ内容(表示専用のクライアント側コピー)。
-    // 「ー」で終わる単語は直前の音の母音が実際の継続文字になるため、五十音表のハイライトに使う。
-    const VOWEL_MAP = {
-      あ: "あ", か: "あ", が: "あ", さ: "あ", ざ: "あ", た: "あ", だ: "あ",
-      な: "あ", は: "あ", ば: "あ", ぱ: "あ", ま: "あ", や: "あ", ら: "あ",
-      わ: "あ", ぁ: "あ", ゃ: "あ",
-      い: "い", き: "い", ぎ: "い", し: "い", じ: "い", ち: "い", ぢ: "い",
-      に: "い", ひ: "い", び: "い", ぴ: "い", み: "い", り: "い", ゐ: "い",
-      ぃ: "い",
-      う: "う", く: "う", ぐ: "う", す: "う", ず: "う", つ: "う", づ: "う",
-      ぬ: "う", ふ: "う", ぶ: "う", ぷ: "う", む: "う", ゆ: "う", る: "う",
-      ぅ: "う", ゅ: "う",
-      え: "え", け: "え", げ: "え", せ: "え", ぜ: "え", て: "え", で: "え",
-      ね: "え", へ: "え", べ: "え", ぺ: "え", め: "え", れ: "え", ゑ: "え",
-      ぇ: "え",
-      お: "お", こ: "お", ご: "お", そ: "お", ぞ: "お", と: "お", ど: "お",
-      の: "お", ほ: "お", ぼ: "お", ぽ: "お", も: "お", よ: "お", ろ: "お",
-      を: "お", ぉ: "お", ょ: "お",
+    // server.js の effectiveLastChar と同じ内容(表示専用のクライアント側コピー)。
+    // 「ー」で終わる単語は、伸ばしている直前の文字がそのまま次の頭文字になる
+    // (例: 「バイナリー」は直前の「り」で継続する)。
+    // 拗音(小さい文字)は単独で単語の先頭になれないため、大文字に変換する
+    // (例: 「マリアージュ」は末尾の「ゅ」ではなく「ゆ」で継続する)。
+    const SMALL_KANA_MAP = {
+      ぁ: "あ", ぃ: "い", ぅ: "う", ぇ: "え", ぉ: "お",
+      ゃ: "や", ゅ: "ゆ", ょ: "よ", っ: "つ", ゎ: "わ",
     };
 
     function effectiveLastChar(word) {
       if (!word) return "";
       if (word.slice(-1) === "ー" && word.length >= 2) {
-        const vowel = VOWEL_MAP[word[word.length - 2]];
-        if (vowel) return vowel;
+        return word[word.length - 2];
       }
-      return word.slice(-1);
+      const last = word.slice(-1);
+      return SMALL_KANA_MAP[last] ?? last;
     }
 
     // 次に入力すべき頭文字をタイマー隣に1文字だけ表示する
@@ -235,6 +211,49 @@
       });
     }
 
+    let hitFlashTimeouts = [null, null];
+
+    // 単語が決まった瞬間に相手のHPへリアルタイムでダメージを反映する
+    function applyDamage(attackerIndex, amount) {
+      if (!amount) return;
+      const targetIndex = attackerIndex === 0 ? 1 : 0;
+      players[targetIndex].hp -= amount;
+      renderHp();
+
+      const el = document.querySelector(`#fighter${targetIndex}`);
+      clearTimeout(hitFlashTimeouts[targetIndex]);
+      el.classList.remove("hit");
+      void el.offsetWidth; // reflow させてアニメーションを最初から再生する
+      el.classList.add("hit");
+      hitFlashTimeouts[targetIndex] = setTimeout(() => el.classList.remove("hit"), 400);
+    }
+
+    function showGameOverResult() {
+      const winnerIndex = players.findIndex((p) => p.hp > 0);
+      const winner = winnerIndex >= 0 ? players[winnerIndex] : null;
+      document.querySelector("#gameOverTitle").textContent =
+        winner ? `${winner.name} の勝利！` : "引き分け";
+      document.querySelector("#gameOverPortrait").innerHTML = winner
+        ? `<img src="${FIGHTER_IMAGES[winnerIndex]}" alt="" class="winner-portrait">`
+        : "";
+      showOverlay("gameOverOverlay");
+    }
+
+    // どちらかのHPが0以下になった瞬間、ターンの途中でも即座に試合を終了する
+    function checkForKnockout() {
+      if (!players.some((p) => p.hp <= 0)) return false;
+      clearInterval(timerHandle);
+      clearInterval(roundResultTimerHandle);
+      clearInterval(getReadyTimerHandle);
+      botRevealTimeouts.forEach((handle) => clearTimeout(handle));
+      botRevealTimeouts = [];
+      document.querySelector("#wordInput").disabled = true;
+      hideOverlay("roundResultOverlay");
+      hideOverlay("handoffOverlay");
+      showGameOverResult();
+      return true;
+    }
+
     // 今誰のターンかを見た目でわかるように、キャラクターをハイライトする
     function setActiveFighter(index) {
       players.forEach((_, i) => {
@@ -242,11 +261,15 @@
       });
     }
 
-    // このターンで獲得した単語をチップ状に描画する(人間・CPU共通)
-    function renderWordChips() {
-      document.querySelector("#turnWordList").innerHTML = turnWords
-        .map((w) => `<li class="word-chip">${w}<span class="chip-count">${w.length}</span></li>`)
-        .join("");
+    // お題から現在までの単語チェーンを直近3語の矢印つなぎで表示する(人間・CPU共通)。
+    // 更新のたびにスライドインさせて、単語が入れ替わったことがわかるようにする。
+    function renderWordChain() {
+      const chain = [seedWord, ...turnWords].filter(Boolean);
+      const el = document.querySelector("#wordChainDisplay");
+      el.textContent = chain.slice(-3).join(" → ");
+      el.classList.remove("slide-in");
+      void el.offsetWidth; // reflow させてアニメーションを最初から再生する
+      el.classList.add("slide-in");
     }
 
     function startMode(mode) {
@@ -348,12 +371,10 @@
       document.querySelector("#inputArea").classList.remove("hidden");
       document.querySelector("#roundLabel").textContent = `ラウンド ${roundNumber}`;
       document.querySelector("#turnLabel").textContent = `${player.name} のターン`;
-      document.querySelector("#seedWordLabel").textContent = seedWord;
-      document.querySelector("#currentChainLabel").textContent = currentChainWord;
+      renderWordChain();
       updateNextChar();
       document.querySelector("#wordErrorMessage").textContent = "";
       document.querySelector("#turnTotalLabel").textContent = "0";
-      document.querySelector("#turnWordList").innerHTML = "";
       const input = document.querySelector("#wordInput");
       input.value = "";
       input.disabled = false;
@@ -364,19 +385,16 @@
 
     function runBotTurn(player) {
       document.querySelector("#inputArea").classList.add("hidden");
-      document.querySelector("#botThinking").classList.remove("hidden");
-      document.querySelector("#botThinking").textContent = "CPUが考え中...";
+      document.querySelector("#botThinking").classList.add("hidden");
       document.querySelector("#roundLabel").textContent = `ラウンド ${roundNumber}`;
       document.querySelector("#turnLabel").textContent = `${player.name} のターン`;
-      document.querySelector("#seedWordLabel").textContent = seedWord;
-      document.querySelector("#currentChainLabel").textContent = currentChainWord;
+      renderWordChain();
       updateNextChar();
       document.querySelector("#turnTotalLabel").textContent = "0";
-      document.querySelector("#turnWordList").innerHTML = "";
 
       apiGet(`/battle/bot-turn?previousWord=${encodeURIComponent(seedWord)}&exclude=${encodeURIComponent(playerHistory[turnIndex].join(","))}`)
         .then((result) => {
-          // CPUが選んだ単語を15秒の間に少しずつ「入力中」のように表示する
+          // CPUが選んだ単語を15秒の間に少しずつチェーンへ反映していく
           const words = result.words;
           const step = words.length > 0 ? BOT_REVEAL_WINDOW_MS / words.length : 0;
           let revealedTotal = 0;
@@ -388,9 +406,10 @@
               allMentionedWords.push(word);
               revealedTotal += word.length;
               currentChainWord = word;
-              document.querySelector("#currentChainLabel").textContent = currentChainWord;
               updateNextChar();
-              renderWordChips();
+              renderWordChain();
+              applyDamage(turnIndex, word.length);
+              if (checkForKnockout()) return;
               document.querySelector("#turnTotalLabel").textContent = String(revealedTotal);
             }, step * i + 400);
             botRevealTimeouts.push(handle);
@@ -398,6 +417,7 @@
 
           if (words.length === 0) {
             document.querySelector("#botThinking").textContent = "CPUは単語を出せませんでした";
+            document.querySelector("#botThinking").classList.remove("hidden");
           }
 
           runTimer(() => endTurn(result.totalLength));
@@ -484,9 +504,10 @@
       turnWords.push(data.word);
       playerHistory[turnIndex].push(data.word);
       allMentionedWords.push(data.word);
-      document.querySelector("#currentChainLabel").textContent = currentChainWord;
       updateNextChar();
-      renderWordChips();
+      renderWordChain();
+      applyDamage(turnIndex, data.word.length);
+      if (checkForKnockout()) return;
       const total = turnWords.reduce((sum, w) => sum + w.length, 0);
       document.querySelector("#turnTotalLabel").textContent = String(total);
 
@@ -516,10 +537,8 @@
     function showRoundResult() {
       const [total0, total1] = roundTotals;
 
-      // 差分ではなく、お互いが稼いだ文字数がそのまま相手へのダメージになる
-      players[1].hp -= total0;
-      players[0].hp -= total1;
-
+      // ダメージは各単語が決まった瞬間にリアルタイムで反映済み(applyDamage)なので、
+      // ここでは結果の集計・表示のみを行う
       document.querySelector("#roundResultTitle").textContent = `ラウンド ${roundNumber} の結果`;
       document.querySelector("#roundResultDetail").innerHTML = `
         <div class="result-side">
@@ -571,16 +590,9 @@
     function nextRoundOrEnd() {
       clearInterval(roundResultTimerHandle);
       hideOverlay("roundResultOverlay");
-      const loser = players.find((p) => p.hp <= 0);
-      if (loser) {
-        const winnerIndex = players.findIndex((p) => p.hp > 0);
-        const winner = winnerIndex >= 0 ? players[winnerIndex] : null;
-        document.querySelector("#gameOverTitle").textContent =
-          winner ? `${winner.name} の勝利！` : "引き分け";
-        document.querySelector("#gameOverPortrait").innerHTML = winner
-          ? `<img src="${FIGHTER_IMAGES[winnerIndex]}" alt="" class="winner-portrait">`
-          : "";
-        showOverlay("gameOverOverlay");
+      // 通常はここに来る前にcheckForKnockout()で即終了しているはずだが、念のため保持
+      if (players.some((p) => p.hp <= 0)) {
+        showGameOverResult();
         return;
       }
       skipNextGetReady = true;

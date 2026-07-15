@@ -3,22 +3,23 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>かなラッシュ</title>
+  <title>Kana-rush</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body class="battle-page">
   <div class="app-shell">
     <header class="app-header">
-      <h1 class="app-title">かなラッシュ</h1>
+      <h1 class="app-title">Kana-rush</h1>
+      <button class="ghost-link" id="backToTopButton">← トップへ戻る</button>
     </header>
 
-    <section id="startScreen" class="screen screen-card">
+    <section id="startScreen" class="screen">
       <div id="modeSelectTeaser">
         <img src="material/music_rapper_woman.png" alt="">
         <span class="vs-badge">VS</span>
         <img src="material/rapper.png" alt="">
       </div>
-      <p class="lead-text">かなでつなぐしりとりゲーム。ひとりで練習するか、CPUやオフラインの相手と対戦しよう。</p>
+      <p class="lead-text">かなでつなぐしりとりゲーム<br>ひとりで練習するか<br>CPUやオフラインの相手と対戦しよう</p>
       <div class="cta-stack">
         <button id="startPracticeButton" class="btn btn-primary">練習する</button>
         <button id="startBotBattleButton" class="btn btn-secondary">CPUと対戦する</button>
@@ -26,7 +27,11 @@
       </div>
     </section>
 
-    <section id="practiceScreen" class="screen screen-card hidden">
+    <section id="practiceScreen" class="screen gameplay-screen hidden">
+      <div class="turn-info-bar">
+        <span id="wordCountLabel" class="pill"></span>
+      </div>
+
       <div id="battleStage" class="single-stage">
         <div class="fighter active-turn" id="practiceFighter">
           <div class="fighter-portrait"><img src="material/music_rapper_woman.png" alt=""></div>
@@ -34,41 +39,29 @@
         </div>
       </div>
 
-      <div class="turn-info-bar">
-        <span id="wordCountLabel" class="pill"></span>
-      </div>
-
-      <div class="timer-row">
-        <div class="timer-badge square-badge" id="practiceTimerBadge">
-          <span class="timer-unit">秒</span>
-          <span id="practiceTimerValue">60</span>
-        </div>
-        <div class="total-char-badge square-badge" title="獲得文字数">
-          <span class="total-char-label">計</span>
-          <span id="practiceScoreValue">0</span>
-        </div>
-        <div class="next-char-badge square-badge" id="practiceNextCharBadge" title="次の頭文字">
-          <span class="next-char-label">次</span>
-          <span id="practiceNextCharValue"></span>
-        </div>
-        <div class="prompt-card">
-          <div class="prompt-line">
-            <span class="prompt-label">現在</span>
-            <span id="practiceCurrentWord" class="prompt-word prompt-word-current"></span>
+      <div class="battle-controls">
+        <div class="timer-row">
+          <div class="timer-badge square-badge" id="practiceTimerBadge">
+            <span class="timer-unit">秒</span>
+            <span id="practiceTimerValue" class="badge-value">60</span>
           </div>
+          <div class="total-char-badge square-badge" title="獲得文字数">
+            <span class="total-char-label">計</span>
+            <span id="practiceScoreValue" class="badge-value">0</span>
+          </div>
+          <div class="next-char-badge square-badge" id="practiceNextCharBadge" title="次の頭文字">
+            <span class="next-char-label">次</span>
+            <span id="practiceNextCharValue" class="badge-value"></span>
+          </div>
+          <div class="word-chain" id="wordChainDisplay"></div>
         </div>
-      </div>
 
-      <div id="practiceInputArea" class="input-row">
-        <input id="practiceWordInput" type="text" autocomplete="off" placeholder="つづく単語を入力...">
-        <button id="practiceSubmitButton" class="btn btn-primary btn-compact">送信</button>
+        <div id="practiceInputArea" class="input-row">
+          <input id="practiceWordInput" type="text" autocomplete="off" placeholder="つづく単語を入力...">
+          <button id="practiceSubmitButton" class="btn btn-primary btn-compact">送信</button>
+        </div>
+        <p id="practiceErrorMessage" class="error-message"></p>
       </div>
-      <p id="practiceErrorMessage" class="error-message"></p>
-
-      <div class="chip-list-header">
-        <span>これまでの単語</span>
-      </div>
-      <ul id="practiceWordList" class="word-chip-list"></ul>
     </section>
   </div>
 
@@ -77,7 +70,16 @@
     <div class="modal-card screen-card">
       <p class="eyebrow">RESULT</p>
       <h2 id="resultTitle" class="section-title"></h2>
-      <p class="caption" id="resultDetail"></p>
+      <div class="result-compare">
+        <div class="result-side">
+          <span class="result-name">文字数</span>
+          <span class="result-score" id="resultScoreValue"></span>
+        </div>
+        <div class="result-side">
+          <span class="result-name">単語数</span>
+          <span class="result-score" id="resultWordCountValue"></span>
+        </div>
+      </div>
       <div class="cta-stack">
         <button id="retryButton" class="btn btn-primary">もう一度挑戦する</button>
       </div>
@@ -92,33 +94,23 @@
   <script>
     const PRACTICE_SECONDS = 60;
 
-    // server.js の VOWEL_MAP / effectiveLastChar と同じ内容(表示専用のクライアント側コピー、
-    // battle.html と同一)。「ー」で終わる単語は直前の音の母音が実際の継続文字になる。
-    const VOWEL_MAP = {
-      あ: "あ", か: "あ", が: "あ", さ: "あ", ざ: "あ", た: "あ", だ: "あ",
-      な: "あ", は: "あ", ば: "あ", ぱ: "あ", ま: "あ", や: "あ", ら: "あ",
-      わ: "あ", ぁ: "あ", ゃ: "あ",
-      い: "い", き: "い", ぎ: "い", し: "い", じ: "い", ち: "い", ぢ: "い",
-      に: "い", ひ: "い", び: "い", ぴ: "い", み: "い", り: "い", ゐ: "い",
-      ぃ: "い",
-      う: "う", く: "う", ぐ: "う", す: "う", ず: "う", つ: "う", づ: "う",
-      ぬ: "う", ふ: "う", ぶ: "う", ぷ: "う", む: "う", ゆ: "う", る: "う",
-      ぅ: "う", ゅ: "う",
-      え: "え", け: "え", げ: "え", せ: "え", ぜ: "え", て: "え", で: "え",
-      ね: "え", へ: "え", べ: "え", ぺ: "え", め: "え", れ: "え", ゑ: "え",
-      ぇ: "え",
-      お: "お", こ: "お", ご: "お", そ: "お", ぞ: "お", と: "お", ど: "お",
-      の: "お", ほ: "お", ぼ: "お", ぽ: "お", も: "お", よ: "お", ろ: "お",
-      を: "お", ぉ: "お", ょ: "お",
+    // server.js の effectiveLastChar と同じ内容(表示専用のクライアント側コピー、battle.html と同一)。
+    // 「ー」で終わる単語は、伸ばしている直前の文字がそのまま次の頭文字になる
+    // (例: 「バイナリー」は直前の「り」で継続する)。
+    // 拗音(小さい文字)は単独で単語の先頭になれないため、大文字に変換する
+    // (例: 「マリアージュ」は末尾の「ゅ」ではなく「ゆ」で継続する)。
+    const SMALL_KANA_MAP = {
+      ぁ: "あ", ぃ: "い", ぅ: "う", ぇ: "え", ぉ: "お",
+      ゃ: "や", ゅ: "ゆ", ょ: "よ", っ: "つ", ゎ: "わ",
     };
 
     function effectiveLastChar(word) {
       if (!word) return "";
       if (word.slice(-1) === "ー" && word.length >= 2) {
-        const vowel = VOWEL_MAP[word[word.length - 2]];
-        if (vowel) return vowel;
+        return word[word.length - 2];
       }
-      return word.slice(-1);
+      const last = word.slice(-1);
+      return SMALL_KANA_MAP[last] ?? last;
     }
 
     // 次に入力すべき頭文字をタイマー隣に1文字だけ表示する(battle.html と共通の見た目)
@@ -136,6 +128,7 @@
     };
 
     let currentWord = "";
+    let initialWord = "";
     let score = 0;
     let wordList = [];
     let timerHandle = null;
@@ -154,6 +147,16 @@
       document.querySelector(`#${id}`).classList.add("hidden");
     }
 
+    async function apiPostJson(url, body) {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await response.json();
+      return { ok: response.status === 200, data };
+    }
+
     let failureFlashTimeout = null;
 
     // 「同じワード」「んワード」を画面中央に大きく表示する(対戦モードと共通の演出)
@@ -170,10 +173,15 @@
       }, 1100);
     }
 
-    function renderWordChips() {
-      document.querySelector("#practiceWordList").innerHTML = wordList
-        .map((w) => `<li class="word-chip">${w}<span class="chip-count">${w.length}</span></li>`)
-        .join("");
+    // お題から現在までの単語チェーンを直近3語の矢印つなぎで表示する(battle.html と共通)。
+    // 更新のたびにスライドインさせて、単語が入れ替わったことがわかるようにする。
+    function renderWordChain() {
+      const chain = [initialWord, ...wordList].filter(Boolean);
+      const el = document.querySelector("#wordChainDisplay");
+      el.textContent = chain.slice(-3).join(" → ");
+      el.classList.remove("slide-in");
+      void el.offsetWidth; // reflow させてアニメーションを最初から再生する
+      el.classList.add("slide-in");
     }
 
     function tickTimer() {
@@ -213,14 +221,13 @@
       score = 0;
       wordList = [];
       document.querySelector("#practiceScoreValue").textContent = "0";
-      document.querySelector("#practiceWordList").innerHTML = "";
       document.querySelector("#practiceErrorMessage").textContent = "";
       document.querySelector("#wordCountLabel").textContent = "0 語";
 
-      const response = await fetch("/reset", { method: "POST" });
-      const data = await response.json();
+      const { data } = await apiPostJson("/reset", {});
       currentWord = data.word;
-      document.querySelector("#practiceCurrentWord").textContent = currentWord;
+      initialWord = data.word;
+      renderWordChain();
       updateNextChar();
 
       const input = document.querySelector("#practiceWordInput");
@@ -240,14 +247,9 @@
 
       pauseTimer();
 
-      const response = await fetch("/shiritori", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nextWord: word }),
-      });
-      const data = await response.json();
+      const { ok, data } = await apiPostJson("/shiritori", { nextWord: word });
 
-      if (response.status !== 200) {
+      if (!ok) {
         document.querySelector("#practiceErrorMessage").textContent = data.errorMessage;
 
         if (data.errorCode === "10002") {
@@ -267,13 +269,12 @@
 
       document.querySelector("#practiceErrorMessage").textContent = "";
       currentWord = data.word;
-      document.querySelector("#practiceCurrentWord").textContent = currentWord;
       updateNextChar();
       wordList.push(currentWord);
       score += currentWord.length;
       document.querySelector("#practiceScoreValue").textContent = String(score);
       document.querySelector("#wordCountLabel").textContent = `${wordList.length} 語`;
-      renderWordChips();
+      renderWordChain();
       resumeTimer();
     }
 
@@ -281,8 +282,8 @@
       clearInterval(timerHandle);
       document.querySelector("#practiceWordInput").disabled = true;
       document.querySelector("#resultTitle").textContent = message;
-      document.querySelector("#resultDetail").textContent =
-        `スコア: ${score} 文字 / ${wordList.length} 語つなげました`;
+      document.querySelector("#resultScoreValue").textContent = String(score);
+      document.querySelector("#resultWordCountValue").textContent = String(wordList.length);
       showOverlay("resultOverlay");
     }
 
@@ -300,6 +301,11 @@
     document.querySelector("#retryButton").onclick = () => {
       hideOverlay("resultOverlay");
       startPractice();
+    };
+    document.querySelector("#backToTopButton").onclick = () => {
+      clearInterval(timerHandle);
+      hideOverlay("resultOverlay");
+      showScreen("startScreen");
     };
 
     showScreen("startScreen");
