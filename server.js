@@ -35,7 +35,7 @@ function getSessionIdFromCookie(req) {
 }
 
 function buildSessionCookie(sessionId) {
-  return `${SESSION_COOKIE_NAME}=${sessionId}; Path=/; HttpOnly; SameSite=Lax`;
+  return `${SESSION_COOKIE_NAME}=${sessionId}; Path=/; HttpOnly; SameSite=Lax; Secure`;
 }
 
 // 上限に達している場合、最も古い(最終アクセスが最も昔の)セッションから破棄する
@@ -237,6 +237,16 @@ function makeJsonResponse(body) {
   });
 }
 
+// リクエストボディをJSONとして読む。壊れたJSONが来ても素の500にせず、
+// 呼び出し側で400として扱えるよう null を返す
+async function parseJsonBody(req) {
+  try {
+    return await req.json();
+  } catch {
+    return null;
+  }
+}
+
 // バトルモード用: 単語1つの妥当性を判定する(グローバル履歴は使わずステートレスに判定)
 async function validateBattleWord(previousWord, rawWord, exclude) {
   if (!rawWord) {
@@ -323,7 +333,10 @@ Deno.serve(async (_req, _info) => {
 
   // POST /shiritori: 次の単語を受け取って判定・更新する
   if (_req.method === "POST" && pathname === "/shiritori") {
-    const requestJson = await _req.json();
+    const requestJson = await parseJsonBody(_req);
+    if (!requestJson) {
+      return makeErrorResponse("リクエストの形式が正しくありません", "10012");
+    }
     const rawNextWord = requestJson["nextWord"];
     const { history, isNew, sessionId } = getOrCreateSession(_req);
     const setCookie = isNew ? buildSessionCookie(sessionId) : undefined;
@@ -395,7 +408,10 @@ Deno.serve(async (_req, _info) => {
 
   // POST /battle/validate-word: バトルモードの単語1つを判定する(グローバル履歴には影響しない)
   if (_req.method === "POST" && pathname === "/battle/validate-word") {
-    const requestJson = await _req.json();
+    const requestJson = await parseJsonBody(_req);
+    if (!requestJson) {
+      return makeErrorResponse("リクエストの形式が正しくありません", "10012");
+    }
     const previousWord = requestJson["previousWord"];
     const rawWord = requestJson["word"];
     const exclude = requestJson["exclude"] ?? [];
