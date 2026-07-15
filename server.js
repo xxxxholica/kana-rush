@@ -16,10 +16,15 @@ function pickRandomInitialWord() {
 // 同一デバイスでも別ブラウザ/シークレットウィンドウなら別セッションとして分離される
 // (同一ブラウザの複数タブは同じCookieを共有するため、その間では引き続き履歴を共有する)。
 // エントリは lastAccess を持ち、一定時間操作がなければ自動的に破棄する(メモリが増え続けないように)。
+// Mapは挿入順を保持するため、アクセス時に delete→set で末尾に移動させれば
+// 「先頭 = 最も長くアクセスされていないセッション」というLRU順を保てる。
 const practiceSessions = new Map();
 const SESSION_COOKIE_NAME = "sid";
 const SESSION_TTL_MS = 6 * 60 * 60 * 1000; // 6時間操作がなければセッションを破棄する
 const SESSION_CLEANUP_INTERVAL_MS = 30 * 60 * 1000; // 30分おきに期限切れセッションを掃除する
+// Cookie無し連打によるMapの無制限肥大化(メモリ枯渇)を防ぐための総数上限。
+// 超過時は最も古いセッションから破棄する
+const MAX_PRACTICE_SESSIONS = 5000;
 
 function getSessionIdFromCookie(req) {
   const cookieHeader = req.headers.get("cookie") ?? "";
@@ -33,11 +38,40 @@ function buildSessionCookie(sessionId) {
   return `${SESSION_COOKIE_NAME}=${sessionId}; Path=/; HttpOnly; SameSite=Lax`;
 }
 
+// 上限に達している場合、最も古い(最終アクセスが最も昔の)セッションから破棄する
+function evictOldestSessionsIfFull() {
+  while (practiceSessions.size >= MAX_PRACTICE_SESSIONS) {
+    const oldestKey = practiceSessions.keys().next().value;
+    practiceSessions.delete(oldestKey);
+  }
+}
+
+// セッションを(新規作成/上書きどちらも)Mapの末尾(最新)に登録する。
+// 新規作成時のみ上限チェックを行う(上書きは既存の枠を使い回すだけなので不要)
+function putSession(sessionId, history) {
+  if (practiceSessions.has(sessionId)) {
+    practiceSessions.delete(sessionId);
+  } else {
+    evictOldestSessionsIfFull();
+  }
+  const session = { history, lastAccess: Date.now() };
+  practiceSessions.set(sessionId, session);
+  return session;
+}
+
+function createSession(sessionId) {
+  return putSession(sessionId, [pickRandomInitialWord()]);
+}
+
 // Cookieのセッションidを解決する(未発行・不明な場合は新規発行するが、履歴はまだ作らない)
 function resolveSessionId(req) {
   const existing = getSessionIdFromCookie(req);
   if (existing && practiceSessions.has(existing)) {
-    practiceSessions.get(existing).lastAccess = Date.now();
+    const session = practiceSessions.get(existing);
+    session.lastAccess = Date.now();
+    // アクセスされたセッションをMapの末尾に移動し、LRU順を維持する
+    practiceSessions.delete(existing);
+    practiceSessions.set(existing, session);
     return { sessionId: existing, isNew: false };
   }
   return { sessionId: crypto.randomUUID(), isNew: true };
@@ -46,13 +80,8 @@ function resolveSessionId(req) {
 // リクエストからセッションの単語履歴を取得する。存在しなければ新規セッションを作成する
 function getOrCreateSession(req) {
   const { sessionId, isNew } = resolveSessionId(req);
-  if (isNew) {
-    practiceSessions.set(sessionId, {
-      history: [pickRandomInitialWord()],
-      lastAccess: Date.now(),
-    });
-  }
-  return { sessionId, isNew, history: practiceSessions.get(sessionId).history };
+  const session = isNew ? createSession(sessionId) : practiceSessions.get(sessionId);
+  return { sessionId, isNew, history: session.history };
 }
 
 // 一定時間操作のないセッションを破棄する(サーバーを動かし続けてもメモリが増え続けないようにするため)
@@ -234,8 +263,56 @@ async function validateBattleWord(previousWord, rawWord, exclude) {
   return { ok: true, word, length: word.length, endsInN: word.slice(-1) === "ん" };
 }
 
-Deno.serve(async (_req) => {
+// IPごとの簡易レート制限(固定ウィンドウ方式)。
+// nginxの背後で動く前提のため、実クライアントIPは X-Real-IP ヘッダーから取得する
+// (直接インターネットに公開する場合は info.remoteAddr にフォールバックする)。
+const RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const RATE_LIMIT_MAX_REQUESTS = 60; // 1IPあたり1分間に60リクエストまで
+const RATE_LIMIT_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
+const rateLimitBuckets = new Map();
+
+function getClientIp(req, info) {
+  return req.headers.get("x-real-ip") ??
+    req.headers.get("x-forwarded-for")?.split(",")[0].trim() ??
+    info?.remoteAddr?.hostname ??
+    "unknown";
+}
+
+// 今回のリクエストがレート制限を超えているか判定し、そのIPのカウンタを更新する
+function isRateLimited(ip) {
+  const now = Date.now();
+  const bucket = rateLimitBuckets.get(ip);
+  if (!bucket || now - bucket.windowStart >= RATE_LIMIT_WINDOW_MS) {
+    rateLimitBuckets.set(ip, { count: 1, windowStart: now });
+    return false;
+  }
+  bucket.count += 1;
+  return bucket.count > RATE_LIMIT_MAX_REQUESTS;
+}
+
+// ウィンドウが過ぎたIPのカウンタを掃除する(IPごとにエントリが残り続けないように)
+function cleanupExpiredRateLimitBuckets() {
+  const now = Date.now();
+  for (const [ip, bucket] of rateLimitBuckets) {
+    if (now - bucket.windowStart >= RATE_LIMIT_WINDOW_MS) {
+      rateLimitBuckets.delete(ip);
+    }
+  }
+}
+
+setInterval(cleanupExpiredRateLimitBuckets, RATE_LIMIT_CLEANUP_INTERVAL_MS);
+
+Deno.serve(async (_req, _info) => {
   const pathname = new URL(_req.url).pathname;
+
+  // 静的ファイル配信もAPIも一律でレート制限の対象にする
+  const clientIp = getClientIp(_req, _info);
+  if (isRateLimited(clientIp)) {
+    return new Response(
+      JSON.stringify({ errorMessage: "リクエストが多すぎます。しばらく待ってから再度お試しください", errorCode: "10011" }),
+      { status: 429, headers: { "Content-Type": "application/json; charset=utf-8" } },
+    );
+  }
 
   // GET /shiritori: 直前の単語と履歴を返す(ブラウザごとにCookieのセッションで分離)
   if (_req.method === "GET" && pathname === "/shiritori") {
@@ -299,10 +376,9 @@ Deno.serve(async (_req) => {
   // POST /reset: 履歴を初期化する(初期語はランダムに選び直す)
   if (_req.method === "POST" && pathname === "/reset") {
     const { sessionId, isNew } = resolveSessionId(_req);
-    const history = [pickRandomInitialWord()];
-    practiceSessions.set(sessionId, { history, lastAccess: Date.now() });
+    const session = putSession(sessionId, [pickRandomInitialWord()]);
     const setCookie = isNew ? buildSessionCookie(sessionId) : undefined;
-    return makeSuccessResponse(history, setCookie);
+    return makeSuccessResponse(session.history, setCookie);
   }
 
   // GET /battle/random-word: ラウンドの起点となる単語をランダムに返す(バトルモード用、ステートレス)
