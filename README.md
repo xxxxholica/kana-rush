@@ -7,10 +7,6 @@ Webブラウザ上で動作するしりとりアプリです。ひとりで練�
 
 <img width="800" alt="kana-rush" src="https://github.com/user-attachments/assets/152fa61a-459a-48ec-81d6-669efd42b029" />
 
-## デプロイ先URL
-
-https://kanarush.hinata.works
-
 ## 使用技術
 
 - バックエンド: Deno（`server.js`）— `serveDir`で静的ファイルを配信しつつ、`Deno.serve`でAPIを実装
